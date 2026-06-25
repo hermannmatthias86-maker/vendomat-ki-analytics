@@ -2,8 +2,20 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Upload, BarChart3, Brain, FileText, Eye, EyeOff } from 'lucide-react'
 import { signIn, signUp, resetPassword } from '../lib/auth'
+import { isSupabaseConfigured } from '../lib/supabase'
 
 type Mode = 'login' | 'register' | 'forgot'
+
+function translateSupabaseError(msg: string): string {
+  if (msg.includes('Invalid login credentials')) return 'E-Mail oder Passwort falsch.'
+  if (msg.includes('Email not confirmed')) return 'Bitte bestätigen Sie zuerst Ihre E-Mail-Adresse.'
+  if (msg.includes('User already registered')) return 'Diese E-Mail-Adresse ist bereits registriert.'
+  if (msg.includes('Password should be at least')) return 'Das Passwort muss mindestens 6 Zeichen lang sein.'
+  if (msg.includes('Invalid URL') || msg.includes('Invalid path') || msg.includes('Failed to fetch'))
+    return 'Verbindung zu Supabase fehlgeschlagen. Bitte Umgebungsvariablen prüfen.'
+  if (msg.includes('rate limit')) return 'Zu viele Versuche. Bitte warten Sie kurz.'
+  return msg
+}
 
 export default function LandingPage() {
   const navigate = useNavigate()
@@ -33,7 +45,8 @@ export default function LandingPage() {
         setSuccess('Passwort-Reset-Link wurde gesendet.')
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten.')
+      const msg = err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten.'
+      setError(translateSupabaseError(msg))
     } finally {
       setLoading(false)
     }
@@ -120,6 +133,11 @@ export default function LandingPage() {
                 {mode === 'login' ? 'Melden Sie sich in Ihrem Konto an.' : mode === 'register' ? 'Erstellen Sie Ihr kostenloses Konto.' : 'Wir senden Ihnen einen Reset-Link.'}
               </p>
 
+              {!isSupabaseConfigured && (
+                <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-lg">
+                  ⚠️ Supabase nicht konfiguriert. Bitte <code className="font-mono">VITE_SUPABASE_URL</code> und <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> in den Umgebungsvariablen setzen.
+                </div>
+              )}
               {error && (
                 <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg">{error}</div>
               )}
