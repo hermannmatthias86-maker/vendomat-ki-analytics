@@ -75,20 +75,32 @@ async function insertRows(
         weekday: extractWeekday(r.date as string),
       }))
       const { error } = await supabase.from('sales').insert(batch)
-      if (error) throw error
+      if (error) throw new Error(error.message || JSON.stringify(error))
     }
   } else if (type === 'products') {
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH).map((r) => ({
-        customer_id: customerId,
-        name: r.name as string || null,
-        total_revenue: (r.total_amount as number) || (r.umsatz as number) || null,
-        total_quantity: r.total_quantity as number || null,
-        year: year || null,
-      }))
-      const { error } = await supabase.from('products').insert(batch)
-      if (error) throw error
+    // Aggregate by name – the same article can appear multiple times
+    // (e.g. once per Zahlungsart in "Umsatz nach Artikel und Abrechnungsart")
+    const agg = new Map<string, { name: string; total_revenue: number; total_quantity: number }>()
+    for (const r of rows) {
+      const name = ((r.name as string | null) ?? '').trim()
+      if (!name) continue
+      const existing = agg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
+      existing.total_revenue += (r.total_amount as number) || 0
+      existing.total_quantity += (r.total_quantity as number) || 0
+      agg.set(name, existing)
     }
+    const aggregated = Array.from(agg.values()).map((a) => ({
+      customer_id: customerId,
+      name: a.name,
+      total_revenue: a.total_revenue || null,
+      total_quantity: a.total_quantity || null,
+      year: year || null,
+    }))
+    for (let i = 0; i < aggregated.length; i += BATCH) {
+      const { error } = await supabase.from('products').insert(aggregated.slice(i, i + BATCH))
+      if (error) throw new Error(`Produktdaten-Import fehlgeschlagen: ${error.message}`)
+    }
+    return aggregated.length
   } else if (type === 'employees') {
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH).map((r) => ({
@@ -99,7 +111,7 @@ async function insertRows(
         year: year || null,
       }))
       const { error } = await supabase.from('employees').insert(batch)
-      if (error) throw error
+      if (error) throw new Error(error.message || JSON.stringify(error))
     }
   } else if (type === 'payments') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -111,7 +123,7 @@ async function insertRows(
         year: year || null,
       }))
       const { error } = await supabase.from('payments').insert(batch)
-      if (error) throw error
+      if (error) throw new Error(error.message || JSON.stringify(error))
     }
   } else if (type === 'product_groups') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -122,7 +134,7 @@ async function insertRows(
         year: year || null,
       }))
       const { error } = await supabase.from('product_groups').insert(batch)
-      if (error) throw error
+      if (error) throw new Error(error.message || JSON.stringify(error))
     }
   }
 

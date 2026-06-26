@@ -59,8 +59,16 @@ export default function UploadPage() {
       ))
       loadHistory()
     } catch (err: unknown) {
+      let message = 'Unbekannter Fehler'
+      if (err instanceof Error) {
+        message = err.message
+      } else if (err && typeof err === 'object' && 'message' in err) {
+        message = String((err as { message: unknown }).message)
+      } else if (typeof err === 'string') {
+        message = err
+      }
       setUploads((prev) => prev.map((u, i) =>
-        i === index ? { ...u, status: 'error' as const, message: err instanceof Error ? err.message : 'Fehler', progress: 0 } : u
+        i === index ? { ...u, status: 'error' as const, message, progress: 0 } : u
       ))
     }
   }, [customer, user])
@@ -138,7 +146,11 @@ export default function UploadPage() {
                       <div className="bg-blue-500 h-1.5 rounded-full transition-all" style={{ width: `${u.progress}%` }} />
                     </div>
                   )}
-                  {u.message && <p className="text-xs text-gray-400 mt-0.5">{u.message}</p>}
+                  {u.message && (
+                    <p className={`text-xs mt-0.5 ${u.status === 'error' ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+                      {u.message}
+                    </p>
+                  )}
                 </div>
                 <button onClick={() => setUploads((prev) => prev.filter((_, j) => j !== i))} className="text-gray-300 hover:text-gray-500">
                   <Trash2 size={14} />
