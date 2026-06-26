@@ -55,7 +55,9 @@ export default function KIChatPage() {
         `Durchschnittlicher Bonwert: ${formatCurrency(kpis.avgReceipt)}. ` +
         `Jahre im System: ${kpis.years.join(', ')}.`
       )
-    } catch {}
+    } catch (err) {
+      console.warn('[KIChatPage] KPI-Kontext nicht verfügbar:', err)
+    }
   }
 
   async function sendMessage(text?: string) {

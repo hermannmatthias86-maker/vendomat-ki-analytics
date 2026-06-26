@@ -44,7 +44,9 @@ export default function KIAnalysePage() {
         `Ø Bonwert: ${formatCurrency(kpis.avgReceipt)}, ` +
         `Jahre: ${kpis.years.join(', ')}`
       )
-    } catch {}
+    } catch (err) {
+      console.warn('[KIAnalysePage] KPI-Zusammenfassung nicht verfügbar:', err)
+    }
   }
 
   async function runAIAnalysis() {

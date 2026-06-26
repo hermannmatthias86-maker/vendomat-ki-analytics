@@ -10,9 +10,9 @@ import EmptyState from '../components/ui/EmptyState'
 const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']
 const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
 
-const ChartPlaceholder = () => (
-  <div className="h-48 bg-gray-100 rounded flex items-center justify-center text-gray-400">
-    Chart wird geladen...
+const NoDataPlaceholder = () => (
+  <div className="h-32 bg-gray-50 rounded flex items-center justify-center text-gray-300 text-xs">
+    Keine Daten vorhanden
   </div>
 )
 
@@ -96,7 +96,7 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          {customer?.name} · {hasData && kpis?.years.length ? `${Math.min(...kpis.years)}–${Math.max(...kpis.years)}` : 'Keine Daten'}
+          {customer?.name}{hasSalesData && kpis!.years.length ? ` · ${Math.min(...kpis!.years)}–${Math.max(...kpis!.years)}` : ''}
         </p>
         {kpis?.years.length ? (
           <select
@@ -141,7 +141,7 @@ export default function Dashboard() {
                   ))}
                 </div>
               ) : (
-                <ChartPlaceholder />
+                <NoDataPlaceholder />
               )}
             </div>
 
@@ -160,7 +160,7 @@ export default function Dashboard() {
                   ))}
                 </div>
               ) : (
-                <ChartPlaceholder />
+                <NoDataPlaceholder />
               )}
             </div>
           </div>}

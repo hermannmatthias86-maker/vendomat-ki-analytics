@@ -35,7 +35,10 @@
       "Bash(curl -sf http://localhost:5173/)",
       "Bash(node -e \"const l = require\\('/home/matze/vendomat-ki-analytics/node_modules/lucide-react/dist/cjs/lucide-react.js'\\); console.log\\('Menu:', typeof l.Menu\\); console.log\\('Bell:', typeof l.Bell\\); console.log\\('version:', require\\('/home/matze/vendomat-ki-analytics/node_modules/lucide-react/package.json'\\).version\\)\")",
       "Bash(grep -v \"^$\")",
-      "Bash(node -e \"const p = require\\('/home/matze/vendomat-ki-analytics/node_modules/@supabase/supabase-js/package.json'\\); console.log\\('version:', p.version\\)\")"
+      "Bash(node -e \"const p = require\\('/home/matze/vendomat-ki-analytics/node_modules/@supabase/supabase-js/package.json'\\); console.log\\('version:', p.version\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }

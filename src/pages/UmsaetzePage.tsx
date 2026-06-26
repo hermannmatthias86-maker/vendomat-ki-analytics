@@ -51,7 +51,7 @@ export default function UmsaetzePage() {
 
   if (loading) return <LoadingSpinner />
   if (error) return <EmptyState message="Fehler beim Laden der Umsatzdaten." />
-  if (!yearData.length) return <EmptyState />
+  if (!yearData.length) return <EmptyState message="Noch keine Umsatzdaten vorhanden." />
 
   const totalRevenue = yearData.reduce((s, d) => s + d.umsatz, 0)
   const bestMonth = [...monthData].sort((a, b) => b.umsatz - a.umsatz)[0]
