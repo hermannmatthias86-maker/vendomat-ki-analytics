@@ -1,4 +1,4 @@
-import { useEffect, useState, Suspense, lazy } from 'react'
+import { useEffect, useState } from 'react'
 import { Euro, Receipt, TrendingUp, BarChart2, Brain, Lightbulb } from 'lucide-react'
 import { useCustomer } from '../hooks/useCustomer'
 import { fetchDashboardKPIs, fetchSalesByMonth, fetchTopProducts, fetchProductGroups, fetchPayments, fetchSalesByWeekday, fetchAIResults } from '../lib/queries'
@@ -6,11 +6,6 @@ import { formatCurrency, formatNumber } from '../lib/exports'
 import KPICard from '../components/ui/KPICard'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import EmptyState from '../components/ui/EmptyState'
-
-const MonthBarChart = lazy(() => import('../components/charts/MonthBarChart'))
-const WeekdayBarChart = lazy(() => import('../components/charts/WeekdayBarChart'))
-const ProductGroupDonut = lazy(() => import('../components/charts/ProductGroupDonut'))
-const PaymentDonut = lazy(() => import('../components/charts/PaymentDonut'))
 
 const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']
 const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
@@ -55,14 +50,12 @@ export default function Dashboard() {
 
       setKpis(kpiData)
 
-      // Aggregate by month
       const byMonth: Record<number, number> = {}
       sales.forEach((s) => {
         if (s.month) byMonth[s.month] = (byMonth[s.month] || 0) + (s.total_amount || 0)
       })
       setMonthData(MONTHS.map((m, i) => ({ month: m, umsatz: byMonth[i + 1] || 0 })))
 
-      // Weekday aggregation
       const byDay: Record<number, number> = {}
       weekdays.forEach((s) => {
         if (s.weekday !== null) byDay[s.weekday] = (byDay[s.weekday] || 0) + (s.total_amount || 0)
@@ -87,6 +80,10 @@ export default function Dashboard() {
   if (customerLoading) return <LoadingSpinner />
 
   const hasData = kpis && kpis.totalRevenue > 0
+  const maxMonth = Math.max(...monthData.map((d) => d.umsatz), 1)
+  const maxDay = Math.max(...weekdayData.map((d) => d.umsatz), 1)
+  const maxGroup = Math.max(...productGroups.map((g) => g.total_revenue || 0), 1)
+  const totalPayments = payments.reduce((s, p) => s + (p.amount || 0), 0) || 1
 
   return (
     <div className="space-y-6">
@@ -102,52 +99,57 @@ export default function Dashboard() {
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Alle Jahre</option>
-            {kpis.years.sort((a, b) => b - a).map((y) => (
+            {[...kpis.years].sort((a, b) => b - a).map((y) => (
               <option key={y} value={y}>{y}</option>
             ))}
           </select>
         ) : null}
       </div>
 
-      {loading ? <LoadingSpinner /> : !hasData ? <EmptyState message="Noch keine Verkaufsdaten vorhanden. Laden Sie Ihre Kassendaten hoch." /> : (
+      {loading ? <LoadingSpinner /> : !hasData ? (
+        <EmptyState message="Noch keine Verkaufsdaten vorhanden. Laden Sie Ihre Kassendaten hoch." />
+      ) : (
         <>
           {/* KPI Cards */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-            <KPICard
-              title="Gesamtumsatz"
-              value={formatCurrency(kpis.totalRevenue)}
-              icon={<Euro size={18} />}
-            />
-            <KPICard
-              title="Ø Jahresumsatz"
-              value={formatCurrency(kpis.avgYearRevenue)}
-              icon={<TrendingUp size={18} />}
-            />
-            <KPICard
-              title="Transaktionen"
-              value={formatNumber(kpis.totalTransactions)}
-              icon={<BarChart2 size={18} />}
-            />
-            <KPICard
-              title="Ø Bonwert"
-              value={formatCurrency(kpis.avgReceipt)}
-              icon={<Receipt size={18} />}
-            />
+            <KPICard title="Gesamtumsatz" value={formatCurrency(kpis.totalRevenue)} icon={<Euro size={18} />} />
+            <KPICard title="Ø Jahresumsatz" value={formatCurrency(kpis.avgYearRevenue)} icon={<TrendingUp size={18} />} />
+            <KPICard title="Transaktionen" value={formatNumber(kpis.totalTransactions)} icon={<BarChart2 size={18} />} />
+            <KPICard title="Ø Bonwert" value={formatCurrency(kpis.avgReceipt)} icon={<Receipt size={18} />} />
           </div>
 
           {/* Charts row 1 */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {/* Month bar chart */}
             <div className="card">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat (Durchschnitt)</h3>
-              <Suspense fallback={<LoadingSpinner />}>
-                <MonthBarChart data={monthData} />
-              </Suspense>
+              <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat</h3>
+              <div className="flex items-end gap-1 h-32">
+                {monthData.map((d) => (
+                  <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
+                    <div
+                      className="w-full bg-blue-500 rounded-t"
+                      style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+                    />
+                    <span className="text-xs text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
+                  </div>
+                ))}
+              </div>
             </div>
+
+            {/* Weekday bar chart */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Wochentag</h3>
-              <Suspense fallback={<LoadingSpinner />}>
-                <WeekdayBarChart data={weekdayData} />
-              </Suspense>
+              <div className="flex items-end gap-2 h-32">
+                {weekdayData.map((d) => (
+                  <div key={d.tag} className="flex-1 flex flex-col items-center gap-1">
+                    <div
+                      className="w-full bg-blue-400 rounded-t"
+                      style={{ height: `${Math.round((d.umsatz / maxDay) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+                    />
+                    <span className="text-xs text-gray-400">{d.tag}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -181,20 +183,50 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Warengruppen Donut */}
+            {/* Warengruppen */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Warengruppen</h3>
-              <Suspense fallback={<LoadingSpinner />}>
-                <ProductGroupDonut data={productGroups} />
-              </Suspense>
+              {productGroups.length === 0 ? (
+                <p className="text-xs text-gray-400">Keine Warengruppendaten vorhanden.</p>
+              ) : (
+                <div className="space-y-2">
+                  {productGroups.slice(0, 6).map((g, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" style={{ opacity: 1 - i * 0.12 }} />
+                      <span className="text-xs text-gray-600 truncate flex-1">{g.name || '—'}</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">
+                        {Math.round(((g.total_revenue || 0) / maxGroup) * 100)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Zahlungsarten Donut */}
+            {/* Zahlungsarten */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Zahlungsarten</h3>
-              <Suspense fallback={<LoadingSpinner />}>
-                <PaymentDonut data={payments} />
-              </Suspense>
+              {payments.length === 0 ? (
+                <p className="text-xs text-gray-400">Keine Zahlungsdaten vorhanden.</p>
+              ) : (
+                <div className="space-y-2">
+                  {payments.map((p, i) => {
+                    const pct = Math.round(((p.amount || 0) / totalPayments) * 100)
+                    const colors = ['bg-blue-500', 'bg-blue-400', 'bg-blue-300', 'bg-gray-300']
+                    return (
+                      <div key={i}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-gray-600">{p.payment_type || '—'}</span>
+                          <span className="text-gray-500">{pct}%</span>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5">
+                          <div className={`${colors[i] || 'bg-gray-300'} h-1.5 rounded-full`} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
