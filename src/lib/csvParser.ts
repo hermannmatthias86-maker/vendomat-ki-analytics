@@ -38,40 +38,44 @@ const COLUMN_ALIASES: Record<string, string> = {
   anteil: 'percentage', prozent: 'percentage',
 }
 
-// Known header keywords used to detect the actual data header row in grouped XLS files
 const HEADER_KEYWORDS = [
   'datum', 'date', 'name', 'bezeichnung', 'artikel', 'umsatz', 'gesamtumsatz',
   'menge', 'anzahl', 'mitarbeiter', 'zahlungsart', 'abrechnungsart', 'warengruppe',
   'netto', 'brutto', 'preis', 'transaktionen', 'betrag', 'bonwert',
 ]
 
-// Prefixes that indicate group-header / subtotal rows (not actual data)
 const SKIP_ROW_PREFIXES = ['gesamt', 'total', 'summe', 'zwischensumme', 'subtotal', 'grand']
 
-function normalizeKey(key: string): string {
-  // Sort aliases longest-first so more specific ones match before shorter substrings
-  const lower = key.toLowerCase().trim()
+// Date patterns like 01.06.2026 or 2026-06-01 or 2026/06/01
+const DATE_PATTERN = /^\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}$|^\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}$/
+
+// Fields that must always be stored as strings – never parsed as numbers
+const STRING_FIELDS = new Set(['name', 'date', 'payment_type', 'product_group'])
+
+function normalizeKey(key: unknown): string {
+  const lower = String(key ?? '').toLowerCase().trim()
   const sorted = Object.entries(COLUMN_ALIASES).sort(([a], [b]) => b.length - a.length)
   for (const [alias, mapped] of sorted) {
     if (lower.includes(alias)) return mapped
   }
-  return lower.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '')
+  return lower.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '') || '_'
 }
 
 function parseNumber(raw: unknown): number | null {
   if (raw === null || raw === undefined || raw === '') return null
   if (typeof raw === 'number') return isNaN(raw) ? null : raw
-  const s = String(raw).trim()
+  const s = String(raw ?? '').trim()
   if (!s) return null
-  // German format: "1.234,56" → remove '.', replace ',' → '.'
+  // Only parse values that look like pure numbers (digits, separators, optional sign).
+  // Prevents "1/2 AFFETTATO LEVENTINESE" or "01.06.2026" from being parsed as a number.
+  if (!/^[-+]?[\d.,]+$/.test(s)) return null
+  // German format: "1.234,56" → remove thousands sep '.', replace decimal ',' → '.'
+  let normalized: string
   const hasComma = s.includes(',')
   const hasDot = s.includes('.')
-  let normalized: string
   if (hasComma && hasDot && s.indexOf('.') < s.indexOf(',')) {
-    // German: 1.234,56
     normalized = s.replace(/\./g, '').replace(',', '.')
   } else if (hasComma && !hasDot) {
-    // German decimal: 1,5
     normalized = s.replace(',', '.')
   } else {
     normalized = s
@@ -87,21 +91,25 @@ function isHeaderRow(row: unknown[]): boolean {
 }
 
 function isSkipRow(row: unknown[], numHeaderCols: number): boolean {
+  if (!row || !row.length) return true
   const cells = row.map((c) => String(c ?? '').trim())
-  const first = cells[0].toLowerCase()
+  const first = String(cells[0] ?? '').toLowerCase()
   const nonEmpty = cells.filter((c) => c !== '').length
 
   if (nonEmpty === 0) return true
+  // Subtotal / group footer rows
   if (SKIP_ROW_PREFIXES.some((p) => first.startsWith(p))) return true
-  // Group-header rows typically have a value only in the first 1-2 columns
+  // Date-only rows that mark group headers (e.g. "01.06.2026")
+  if (DATE_PATTERN.test(String(cells[0] ?? '').trim())) return true
+  // Rows with only 1–2 filled cells are group headers / footers, not data
   if (numHeaderCols > 3 && nonEmpty <= 2 && cells.slice(2).every((c) => c === '')) return true
 
   return false
 }
 
 function detectReportType(headers: string[], filename = ''): ReportType {
-  const n = headers.map((h) => h.toLowerCase())
-  const fn = filename.toLowerCase()
+  const n = headers.map((h) => String(h ?? '').toLowerCase())
+  const fn = String(filename ?? '').toLowerCase()
 
   const hasDate = n.some((h) => h.includes('datum') || h.includes('date'))
   const hasProduct = n.some((h) =>
@@ -129,9 +137,9 @@ function detectReportType(headers: string[], filename = ''): ReportType {
   if (fn.includes('warengruppe')) return 'product_groups'
   if (fn.includes('zahlung') || fn.includes('abrechnung')) return 'payments'
 
-  // A "Name + Anzahl/Menge + amount" structure = product report
+  // "Name + Anzahl/Menge + amount" without a date column = product report
   const hasName = n.some((h) => h === 'name' || h.includes('bezeichnung'))
-  if (hasName && hasQuantity && hasAmount) return 'products'
+  if (hasName && hasQuantity && hasAmount && !hasDate) return 'products'
 
   return 'unknown'
 }
@@ -143,7 +151,7 @@ export async function parseFile(file: File): Promise<{
   year?: number
   debugInfo?: string
 }> {
-  const ext = file.name.split('.').pop()?.toLowerCase()
+  const ext = String(file.name ?? '').split('.').pop()?.toLowerCase() ?? ''
 
   let rawRows: Record<string, unknown>[] = []
   let headers: string[] = []
@@ -157,7 +165,7 @@ export async function parseFile(file: File): Promise<{
       dynamicTyping: false,
     })
     rawRows = result.data as Record<string, unknown>[]
-    headers = result.meta.fields || []
+    headers = (result.meta.fields || []).map((f) => String(f ?? ''))
     debugInfo = `CSV: ${rawRows.length} Zeilen, Spalten: ${headers.join(', ')}`
   } else if (ext === 'xlsx' || ext === 'xls') {
     const buffer = await file.arrayBuffer()
@@ -166,31 +174,30 @@ export async function parseFile(file: File): Promise<{
     if (!sheetName) throw new Error('Excel-Datei enthält keine Tabellen.')
     const sheet = workbook.Sheets[sheetName]
 
-    // Read as raw array matrix so we can handle grouped/titled JasperReports layouts
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
       header: 1,
       defval: '',
       blankrows: false,
     })
 
-    // Find the actual header row (first row with >= 2 known column keyword matches)
+    // Find the actual data header row (first row with >= 2 known column keyword matches)
     let headerRowIdx = 0
-    for (let i = 0; i < Math.min(matrix.length, 20); i++) {
-      if (isHeaderRow(matrix[i] as unknown[])) {
+    for (let i = 0; i < Math.min(matrix.length, 25); i++) {
+      const row = matrix[i]
+      if (Array.isArray(row) && isHeaderRow(row)) {
         headerRowIdx = i
         break
       }
     }
 
-    headers = (matrix[headerRowIdx] as unknown[]).map((c) => String(c ?? '').trim()).filter(Boolean)
-    const headerStr = headers.join('|')
+    const rawHeaderRow = Array.isArray(matrix[headerRowIdx]) ? (matrix[headerRowIdx] as unknown[]) : []
+    headers = rawHeaderRow.map((c) => String(c ?? '').trim()).filter(Boolean)
+    const headerStr = headers.map((h) => String(h ?? '').trim()).join('|')
     debugInfo = `XLS: Headerzeile ${headerRowIdx}, Spalten: ${headers.join(', ')}`
 
-    // Convert data rows, skipping group headers, subtotals, empty rows and repeated headers
     for (let i = headerRowIdx + 1; i < matrix.length; i++) {
-      const row = matrix[i] as unknown[]
+      const row = Array.isArray(matrix[i]) ? (matrix[i] as unknown[]) : []
       if (isSkipRow(row, headers.length)) continue
-      // Skip repeated header rows
       const rowStr = row.slice(0, headers.length).map((c) => String(c ?? '').trim()).join('|')
       if (rowStr === headerStr) continue
 
@@ -208,24 +215,29 @@ export async function parseFile(file: File): Promise<{
     )
   }
 
-  const type = detectReportType(headers, file.name)
+  const type = detectReportType(headers, String(file.name ?? ''))
 
   const rows: ParsedRow[] = rawRows.map((row) => {
     const normalized: ParsedRow = {}
     for (const key in row) {
       const normKey = normalizeKey(key)
       const val = row[key]
-      const num = parseNumber(val)
-      normalized[normKey] = num !== null ? num : (String(val ?? '').trim() || null)
+      if (STRING_FIELDS.has(normKey)) {
+        // Always store as string – article names like "1/2 AFFETTATO..." must not become 12
+        normalized[normKey] = String(val ?? '').trim() || null
+      } else {
+        const num = parseNumber(val)
+        normalized[normKey] = num !== null ? num : (String(val ?? '').trim() || null)
+      }
     }
     return normalized
   })
 
-  // Extract year from filename (e.g. 2026-06-01 or 2026)
-  const yearMatch = file.name.match(/20\d{2}/)
+  const yearMatch = String(file.name ?? '').match(/20\d{2}/)
   const year = yearMatch ? parseInt(yearMatch[0]) : undefined
 
   console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year)
+  console.info('[csvParser] Erste 3 Zeilen:', JSON.stringify(rows.slice(0, 3)))
 
   return { type, rows, headers, year, debugInfo }
 }

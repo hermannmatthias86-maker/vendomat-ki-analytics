@@ -1,12 +1,9 @@
-import { useEffect, useState, Suspense, lazy } from 'react'
+import { useEffect, useState } from 'react'
 import { useCustomer } from '../hooks/useCustomer'
 import { fetchSalesByYear, fetchSalesByMonth } from '../lib/queries'
 import { formatCurrency } from '../lib/exports'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import EmptyState from '../components/ui/EmptyState'
-
-const RevenueLineChart = lazy(() => import('../components/charts/RevenueLineChart'))
-const MonthBarChart = lazy(() => import('../components/charts/MonthBarChart'))
 
 const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
 
@@ -59,6 +56,8 @@ export default function UmsaetzePage() {
   const totalRevenue = yearData.reduce((s, d) => s + d.umsatz, 0)
   const bestMonth = [...monthData].sort((a, b) => b.umsatz - a.umsatz)[0]
   const worstMonth = [...monthData].filter((m) => m.umsatz > 0).sort((a, b) => a.umsatz - b.umsatz)[0]
+  const maxYear = Math.max(...yearData.map((d) => d.umsatz), 1)
+  const maxMonth = Math.max(...monthData.map((d) => d.umsatz), 1)
 
   return (
     <div className="space-y-6">
@@ -81,16 +80,33 @@ export default function UmsaetzePage() {
 
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatzentwicklung nach Jahr</h3>
-        <Suspense fallback={<LoadingSpinner />}>
-          <RevenueLineChart data={yearData} />
-        </Suspense>
+        <div className="flex items-end gap-4 h-40">
+          {yearData.map((d) => (
+            <div key={d.year} className="flex-1 flex flex-col items-center gap-2">
+              <span className="text-xs text-gray-600 font-medium">{formatCurrency(d.umsatz)}</span>
+              <div
+                className="w-full bg-blue-500 rounded-t"
+                style={{ height: `${Math.round((d.umsatz / maxYear) * 100)}%`, minHeight: '4px' }}
+              />
+              <span className="text-xs text-gray-500">{d.year}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat</h3>
-        <Suspense fallback={<LoadingSpinner />}>
-          <MonthBarChart data={monthData} />
-        </Suspense>
+        <div className="flex items-end gap-1 h-32">
+          {monthData.map((d) => (
+            <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
+              <div
+                className="w-full bg-blue-500 rounded-t"
+                style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+              />
+              <span className="text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card overflow-x-auto">

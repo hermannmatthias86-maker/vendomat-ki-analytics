@@ -1,12 +1,9 @@
-import { useEffect, useState, Suspense, lazy } from 'react'
+import { useEffect, useState } from 'react'
 import { useCustomer } from '../hooks/useCustomer'
 import { fetchSalesByMonth, fetchSalesByWeekday } from '../lib/queries'
 import { formatCurrency } from '../lib/exports'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import EmptyState from '../components/ui/EmptyState'
-
-const WeekdayBarChart = lazy(() => import('../components/charts/WeekdayBarChart'))
-const MonthBarChart = lazy(() => import('../components/charts/MonthBarChart'))
 
 const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
 
@@ -51,6 +48,8 @@ export default function ZeitanalysePage() {
 
   const bestDay = [...weekdayData].sort((a, b) => b.umsatz - a.umsatz)[0]
   const bestMonth = [...monthData].sort((a, b) => b.umsatz - a.umsatz)[0]
+  const maxDay = Math.max(...weekdayData.map((d) => d.umsatz), 1)
+  const maxMonth = Math.max(...monthData.map((d) => d.umsatz), 1)
 
   return (
     <div className="space-y-6">
@@ -69,16 +68,32 @@ export default function ZeitanalysePage() {
 
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Wochentag</h3>
-        <Suspense fallback={<LoadingSpinner />}>
-          <WeekdayBarChart data={weekdayData} />
-        </Suspense>
+        <div className="flex items-end gap-2 h-32">
+          {weekdayData.map((d) => (
+            <div key={d.tag} className="flex-1 flex flex-col items-center gap-1">
+              <div
+                className="w-full bg-blue-400 rounded-t"
+                style={{ height: `${Math.round((d.umsatz / maxDay) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+              />
+              <span className="text-xs text-gray-400">{d.tag}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat</h3>
-        <Suspense fallback={<LoadingSpinner />}>
-          <MonthBarChart data={monthData} />
-        </Suspense>
+        <div className="flex items-end gap-1 h-32">
+          {monthData.map((d) => (
+            <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
+              <div
+                className="w-full bg-blue-500 rounded-t"
+                style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+              />
+              <span className="text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

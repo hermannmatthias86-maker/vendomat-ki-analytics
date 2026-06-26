@@ -34,31 +34,41 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+const fullPageFallback = <div className="min-h-screen flex items-center justify-center"><LoadingSpinner /></div>
+
 export default function App() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner /></div>}>
-          <Routes>
-            <Route path="/" element={<PublicRoute><LandingPage /></PublicRoute>} />
-            <Route element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/umsaetze" element={<UmsaetzePage />} />
-              <Route path="/artikel" element={<ArtikelPage />} />
-              <Route path="/warengruppen" element={<WarengruppenPage />} />
-              <Route path="/mitarbeiter" element={<MitarbeiterPage />} />
-              <Route path="/zahlungsarten" element={<ZahlungsartenPage />} />
-              <Route path="/zeitanalyse" element={<ZeitanalysePage />} />
-              <Route path="/ki-analyse" element={<KIAnalysePage />} />
-              <Route path="/ki-chat" element={<KIChatPage />} />
-              <Route path="/berichte" element={<BerichtePage />} />
-              <Route path="/upload" element={<UploadPage />} />
-              <Route path="/einstellungen" element={<EinstellungenPage />} />
-            </Route>
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <Routes>
+          {/* Public routes: each wrapped in its own Suspense so lazy loading never touches DashboardLayout */}
+          <Route path="/" element={
+            <Suspense fallback={fullPageFallback}>
+              <PublicRoute><LandingPage /></PublicRoute>
+            </Suspense>
+          } />
+          <Route path="/reset-password" element={
+            <Suspense fallback={fullPageFallback}>
+              <ResetPasswordPage />
+            </Suspense>
+          } />
+          {/* Dashboard routes: lazy pages caught by inner Suspense inside DashboardLayout */}
+          <Route element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/umsaetze" element={<UmsaetzePage />} />
+            <Route path="/artikel" element={<ArtikelPage />} />
+            <Route path="/warengruppen" element={<WarengruppenPage />} />
+            <Route path="/mitarbeiter" element={<MitarbeiterPage />} />
+            <Route path="/zahlungsarten" element={<ZahlungsartenPage />} />
+            <Route path="/zeitanalyse" element={<ZeitanalysePage />} />
+            <Route path="/ki-analyse" element={<KIAnalysePage />} />
+            <Route path="/ki-chat" element={<KIChatPage />} />
+            <Route path="/berichte" element={<BerichtePage />} />
+            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/einstellungen" element={<EinstellungenPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </BrowserRouter>
     </ErrorBoundary>
   )

@@ -10,6 +10,12 @@ import EmptyState from '../components/ui/EmptyState'
 const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']
 const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
 
+const ChartPlaceholder = () => (
+  <div className="h-48 bg-gray-100 rounded flex items-center justify-center text-gray-400">
+    Chart wird geladen...
+  </div>
+)
+
 export default function Dashboard() {
   const { customer, loading: customerLoading } = useCustomer()
   const [kpis, setKpis] = useState<{
@@ -79,7 +85,8 @@ export default function Dashboard() {
 
   if (customerLoading) return <LoadingSpinner />
 
-  const hasData = kpis && kpis.totalRevenue > 0
+  const hasSalesData = kpis && kpis.totalRevenue > 0
+  const hasData = hasSalesData || topProducts.length > 0 || payments.length > 0 || productGroups.length > 0
   const maxMonth = Math.max(...monthData.map((d) => d.umsatz), 1)
   const maxDay = Math.max(...weekdayData.map((d) => d.umsatz), 1)
   const maxGroup = Math.max(...productGroups.map((g) => g.total_revenue || 0), 1)
@@ -87,7 +94,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Year filter */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
           {customer?.name} · {hasData && kpis?.years.length ? `${Math.min(...kpis.years)}–${Math.max(...kpis.years)}` : 'Keine Daten'}
@@ -110,52 +116,56 @@ export default function Dashboard() {
         <EmptyState message="Noch keine Verkaufsdaten vorhanden. Laden Sie Ihre Kassendaten hoch." />
       ) : (
         <>
-          {/* KPI Cards */}
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-            <KPICard title="Gesamtumsatz" value={formatCurrency(kpis.totalRevenue)} icon={<Euro size={18} />} />
-            <KPICard title="Ø Jahresumsatz" value={formatCurrency(kpis.avgYearRevenue)} icon={<TrendingUp size={18} />} />
-            <KPICard title="Transaktionen" value={formatNumber(kpis.totalTransactions)} icon={<BarChart2 size={18} />} />
-            <KPICard title="Ø Bonwert" value={formatCurrency(kpis.avgReceipt)} icon={<Receipt size={18} />} />
-          </div>
+          {hasSalesData && (
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+              <KPICard title="Gesamtumsatz" value={formatCurrency(kpis!.totalRevenue)} icon={<Euro size={18} />} />
+              <KPICard title="Ø Jahresumsatz" value={formatCurrency(kpis!.avgYearRevenue)} icon={<TrendingUp size={18} />} />
+              <KPICard title="Transaktionen" value={formatNumber(kpis!.totalTransactions)} icon={<BarChart2 size={18} />} />
+              <KPICard title="Ø Bonwert" value={formatCurrency(kpis!.avgReceipt)} icon={<Receipt size={18} />} />
+            </div>
+          )}
 
-          {/* Charts row 1 */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {/* Month bar chart */}
+          {hasSalesData && <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat</h3>
-              <div className="flex items-end gap-1 h-32">
-                {monthData.map((d) => (
-                  <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
-                    <div
-                      className="w-full bg-blue-500 rounded-t"
-                      style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
-                    />
-                    <span className="text-xs text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
-                  </div>
-                ))}
-              </div>
+              {monthData.some((d) => d.umsatz > 0) ? (
+                <div className="flex items-end gap-1 h-32">
+                  {monthData.map((d) => (
+                    <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
+                      <div
+                        className="w-full bg-blue-500 rounded-t"
+                        style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+                      />
+                      <span className="text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <ChartPlaceholder />
+              )}
             </div>
 
-            {/* Weekday bar chart */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Wochentag</h3>
-              <div className="flex items-end gap-2 h-32">
-                {weekdayData.map((d) => (
-                  <div key={d.tag} className="flex-1 flex flex-col items-center gap-1">
-                    <div
-                      className="w-full bg-blue-400 rounded-t"
-                      style={{ height: `${Math.round((d.umsatz / maxDay) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
-                    />
-                    <span className="text-xs text-gray-400">{d.tag}</span>
-                  </div>
-                ))}
-              </div>
+              {weekdayData.some((d) => d.umsatz > 0) ? (
+                <div className="flex items-end gap-2 h-32">
+                  {weekdayData.map((d) => (
+                    <div key={d.tag} className="flex-1 flex flex-col items-center gap-1">
+                      <div
+                        className="w-full bg-blue-400 rounded-t"
+                        style={{ height: `${Math.round((d.umsatz / maxDay) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
+                      />
+                      <span className="text-xs text-gray-400">{d.tag}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <ChartPlaceholder />
+              )}
             </div>
-          </div>
+          </div>}
 
-          {/* Charts row 2 */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            {/* Top Artikel */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Top 5 Artikel</h3>
               {topProducts.length === 0 ? (
@@ -183,7 +193,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Warengruppen */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Warengruppen</h3>
               {productGroups.length === 0 ? (
@@ -203,7 +212,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Zahlungsarten */}
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Zahlungsarten</h3>
               {payments.length === 0 ? (
@@ -230,7 +238,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* AI Section */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <div className="card">
               <div className="flex items-center gap-2 mb-4">

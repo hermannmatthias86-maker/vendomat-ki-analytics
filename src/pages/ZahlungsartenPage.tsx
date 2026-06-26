@@ -1,11 +1,11 @@
-import { useEffect, useState, Suspense, lazy } from 'react'
+import { useEffect, useState } from 'react'
 import { useCustomer } from '../hooks/useCustomer'
 import { fetchPayments } from '../lib/queries'
 import { formatCurrency } from '../lib/exports'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 import EmptyState from '../components/ui/EmptyState'
 
-const PaymentDonut = lazy(() => import('../components/charts/PaymentDonut'))
+const BAR_COLORS = ['bg-blue-500', 'bg-blue-400', 'bg-blue-300', 'bg-gray-300']
 
 export default function ZahlungsartenPage() {
   const { customer } = useCustomer()
@@ -25,13 +25,28 @@ export default function ZahlungsartenPage() {
   if (error) return <EmptyState message="Fehler beim Laden der Zahlungsartendaten." />
   if (!payments.length) return <EmptyState message="Noch keine Zahlungsartendaten vorhanden." />
 
+  const total = payments.reduce((s, p) => s + (p.amount || 0), 0) || 1
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Zahlungsarten Verteilung</h3>
-        <Suspense fallback={<LoadingSpinner />}>
-          <PaymentDonut data={payments} />
-        </Suspense>
+        <div className="space-y-3">
+          {payments.map((p, i) => {
+            const pct = ((p.amount || 0) / total) * 100
+            return (
+              <div key={i}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-gray-600">{p.payment_type || '—'}</span>
+                  <span className="text-gray-500">{pct.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2">
+                  <div className={`${BAR_COLORS[i] || 'bg-gray-300'} h-2 rounded-full`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
       <div className="card">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Übersicht</h3>
