@@ -11,13 +11,18 @@ export default function ZahlungsartenPage() {
   const { customer } = useCustomer()
   const [payments, setPayments] = useState<{ payment_type: string | null; amount: number | null; percentage: number | null; year: number | null }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
-    fetchPayments(customer.id).then((data) => { setPayments(data); setLoading(false) })
+    fetchPayments(customer.id)
+      .then((data) => setPayments(data))
+      .catch((err) => { console.error(err); setError(true) })
+      .finally(() => setLoading(false))
   }, [customer])
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Zahlungsartendaten." />
   if (!payments.length) return <EmptyState message="Noch keine Zahlungsartendaten vorhanden." />
 
   return (

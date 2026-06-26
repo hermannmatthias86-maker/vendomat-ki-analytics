@@ -74,7 +74,8 @@ async function insertRows(
         month: extractMonth(r.date as string),
         weekday: extractWeekday(r.date as string),
       }))
-      await supabase.from('sales').insert(batch)
+      const { error } = await supabase.from('sales').insert(batch)
+      if (error) throw error
     }
   } else if (type === 'products') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -85,7 +86,8 @@ async function insertRows(
         total_quantity: r.total_quantity as number || null,
         year: year || null,
       }))
-      await supabase.from('products').insert(batch)
+      const { error } = await supabase.from('products').insert(batch)
+      if (error) throw error
     }
   } else if (type === 'employees') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -96,7 +98,8 @@ async function insertRows(
         transaction_count: r.transaction_count as number || null,
         year: year || null,
       }))
-      await supabase.from('employees').insert(batch)
+      const { error } = await supabase.from('employees').insert(batch)
+      if (error) throw error
     }
   } else if (type === 'payments') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -107,7 +110,8 @@ async function insertRows(
         percentage: r.percentage as number || null,
         year: year || null,
       }))
-      await supabase.from('payments').insert(batch)
+      const { error } = await supabase.from('payments').insert(batch)
+      if (error) throw error
     }
   } else if (type === 'product_groups') {
     for (let i = 0; i < rows.length; i += BATCH) {
@@ -117,7 +121,8 @@ async function insertRows(
         total_revenue: r.total_amount as number || null,
         year: year || null,
       }))
-      await supabase.from('product_groups').insert(batch)
+      const { error } = await supabase.from('product_groups').insert(batch)
+      if (error) throw error
     }
   }
 

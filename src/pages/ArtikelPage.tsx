@@ -9,13 +9,18 @@ export default function ArtikelPage() {
   const { customer } = useCustomer()
   const [products, setProducts] = useState<{ name: string | null; total_revenue: number | null; total_quantity: number | null; year: number | null }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
-    fetchTopProducts(customer.id, undefined, 50).then((data) => { setProducts(data); setLoading(false) })
+    fetchTopProducts(customer.id, undefined, 50)
+      .then((data) => setProducts(data))
+      .catch((err) => { console.error(err); setError(true) })
+      .finally(() => setLoading(false))
   }, [customer])
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Artikeldaten." />
   if (!products.length) return <EmptyState message="Noch keine Artikeldaten vorhanden." />
 
   const maxRevenue = Math.max(...products.map((p) => p.total_revenue || 0))

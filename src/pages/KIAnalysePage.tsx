@@ -18,6 +18,7 @@ export default function KIAnalysePage() {
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [kpiSummary, setKpiSummary] = useState('')
+  const [analysisError, setAnalysisError] = useState('')
 
   useEffect(() => {
     if (!customer) return
@@ -65,7 +66,7 @@ export default function KIAnalysePage() {
       await loadResults()
     } catch (err: unknown) {
       console.error(err)
-      alert(err instanceof Error ? err.message : 'KI-Analyse fehlgeschlagen')
+      setAnalysisError(err instanceof Error ? err.message : 'KI-Analyse fehlgeschlagen')
     } finally {
       setGenerating(false)
     }
@@ -91,6 +92,10 @@ export default function KIAnalysePage() {
           {generating ? 'Analysiere…' : 'Neu analysieren'}
         </button>
       </div>
+
+      {analysisError && (
+        <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg">{analysisError}</div>
+      )}
 
       {loading ? <LoadingSpinner /> : (
         <>

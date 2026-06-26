@@ -113,7 +113,7 @@ export default function LandingPage() {
           </div>
 
           <div className="z-10 text-xs text-gray-500">
-            © 2024 vendomat KI Analytics · DSGVO-konform
+            © {new Date().getFullYear()} vendomat KI Analytics · DSGVO-konform
           </div>
         </div>
 

@@ -15,6 +15,7 @@ export default function ZeitanalysePage() {
   const [weekdayData, setWeekdayData] = useState<{ tag: string; umsatz: number }[]>([])
   const [monthData, setMonthData] = useState<{ month: string; umsatz: number }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
@@ -23,23 +24,29 @@ export default function ZeitanalysePage() {
 
   async function load() {
     if (!customer) return
-    const [weekdays, months] = await Promise.all([
-      fetchSalesByWeekday(customer.id),
-      fetchSalesByMonth(customer.id),
-    ])
+    try {
+      const [weekdays, months] = await Promise.all([
+        fetchSalesByWeekday(customer.id),
+        fetchSalesByMonth(customer.id),
+      ])
 
-    const byDay: Record<number, number> = {}
-    weekdays.forEach((s) => { if (s.weekday !== null) byDay[s.weekday] = (byDay[s.weekday] || 0) + (s.total_amount || 0) })
-    setWeekdayData(['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'].map((d, i) => ({ tag: d, umsatz: byDay[i] || 0 })))
+      const byDay: Record<number, number> = {}
+      weekdays.forEach((s) => { if (s.weekday !== null) byDay[s.weekday] = (byDay[s.weekday] || 0) + (s.total_amount || 0) })
+      setWeekdayData(['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'].map((d, i) => ({ tag: d, umsatz: byDay[i] || 0 })))
 
-    const byMonth: Record<number, number> = {}
-    months.forEach((s) => { if (s.month) byMonth[s.month] = (byMonth[s.month] || 0) + (s.total_amount || 0) })
-    setMonthData(MONTHS.map((m, i) => ({ month: m, umsatz: byMonth[i + 1] || 0 })))
-
-    setLoading(false)
+      const byMonth: Record<number, number> = {}
+      months.forEach((s) => { if (s.month) byMonth[s.month] = (byMonth[s.month] || 0) + (s.total_amount || 0) })
+      setMonthData(MONTHS.map((m, i) => ({ month: m, umsatz: byMonth[i + 1] || 0 })))
+    } catch (err) {
+      console.error(err)
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Zeitdaten." />
   if (weekdayData.every((d) => d.umsatz === 0)) return <EmptyState message="Noch keine Zeitdaten vorhanden." />
 
   const bestDay = [...weekdayData].sort((a, b) => b.umsatz - a.umsatz)[0]

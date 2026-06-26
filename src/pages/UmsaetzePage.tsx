@@ -15,6 +15,7 @@ export default function UmsaetzePage() {
   const [yearData, setYearData] = useState<{ year: number; umsatz: number }[]>([])
   const [monthData, setMonthData] = useState<{ month: string; umsatz: number; transaktionen: number }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
@@ -24,28 +25,35 @@ export default function UmsaetzePage() {
   async function load() {
     if (!customer) return
     setLoading(true)
-    const [byYear, byMonth] = await Promise.all([
-      fetchSalesByYear(customer.id),
-      fetchSalesByMonth(customer.id),
-    ])
+    try {
+      const [byYear, byMonth] = await Promise.all([
+        fetchSalesByYear(customer.id),
+        fetchSalesByMonth(customer.id),
+      ])
 
-    const yearMap: Record<number, number> = {}
-    byYear.forEach((r) => { if (r.year) yearMap[r.year] = (yearMap[r.year] || 0) + (r.total_amount || 0) })
-    setYearData(Object.entries(yearMap).map(([y, u]) => ({ year: Number(y), umsatz: u })).sort((a, b) => a.year - b.year))
+      const yearMap: Record<number, number> = {}
+      byYear.forEach((r) => { if (r.year) yearMap[r.year] = (yearMap[r.year] || 0) + (r.total_amount || 0) })
+      setYearData(Object.entries(yearMap).map(([y, u]) => ({ year: Number(y), umsatz: u })).sort((a, b) => a.year - b.year))
 
-    const monthMap: Record<number, { umsatz: number; t: number }> = {}
-    byMonth.forEach((r) => {
-      if (r.month) {
-        if (!monthMap[r.month]) monthMap[r.month] = { umsatz: 0, t: 0 }
-        monthMap[r.month].umsatz += r.total_amount || 0
-        monthMap[r.month].t += r.transaction_count || 0
-      }
-    })
-    setMonthData(MONTHS.map((m, i) => ({ month: m, umsatz: monthMap[i + 1]?.umsatz || 0, transaktionen: monthMap[i + 1]?.t || 0 })))
-    setLoading(false)
+      const monthMap: Record<number, { umsatz: number; t: number }> = {}
+      byMonth.forEach((r) => {
+        if (r.month) {
+          if (!monthMap[r.month]) monthMap[r.month] = { umsatz: 0, t: 0 }
+          monthMap[r.month].umsatz += r.total_amount || 0
+          monthMap[r.month].t += r.transaction_count || 0
+        }
+      })
+      setMonthData(MONTHS.map((m, i) => ({ month: m, umsatz: monthMap[i + 1]?.umsatz || 0, transaktionen: monthMap[i + 1]?.t || 0 })))
+    } catch (err) {
+      console.error(err)
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Umsatzdaten." />
   if (!yearData.length) return <EmptyState />
 
   const totalRevenue = yearData.reduce((s, d) => s + d.umsatz, 0)

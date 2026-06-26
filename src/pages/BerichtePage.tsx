@@ -15,6 +15,7 @@ const REPORTS = [
 export default function BerichtePage() {
   const { customer } = useCustomer()
   const [loading, setLoading] = useState<string | null>(null)
+  const [error, setError] = useState('')
 
   async function handleExport(reportId: string, format: 'pdf' | 'excel') {
     if (!customer) return
@@ -55,7 +56,7 @@ export default function BerichtePage() {
       else exportToExcel(title, data)
     } catch (err) {
       console.error(err)
-      alert('Export fehlgeschlagen.')
+      setError('Export fehlgeschlagen. Bitte prüfen Sie die Verbindung.')
     } finally {
       setLoading(null)
     }
@@ -67,6 +68,10 @@ export default function BerichtePage() {
         <h2 className="text-base font-semibold text-gray-900 mb-1">Berichte & Exporte</h2>
         <p className="text-sm text-gray-500">Exportieren Sie Ihre Daten als PDF oder Excel-Datei.</p>
       </div>
+
+      {error && (
+        <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg">{error}</div>
+      )}
 
       {REPORTS.map((report) => (
         <div key={report.id} className="card flex items-center justify-between">

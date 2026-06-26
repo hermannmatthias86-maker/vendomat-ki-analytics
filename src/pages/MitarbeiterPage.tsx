@@ -9,13 +9,18 @@ export default function MitarbeiterPage() {
   const { customer } = useCustomer()
   const [employees, setEmployees] = useState<{ name: string | null; total_revenue: number | null; transaction_count: number | null; year: number | null }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
-    fetchEmployees(customer.id).then((data) => { setEmployees(data); setLoading(false) })
+    fetchEmployees(customer.id)
+      .then((data) => setEmployees(data))
+      .catch((err) => { console.error(err); setError(true) })
+      .finally(() => setLoading(false))
   }, [customer])
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Mitarbeiterdaten." />
   if (!employees.length) return <EmptyState message="Noch keine Mitarbeiterdaten vorhanden." />
 
   return (

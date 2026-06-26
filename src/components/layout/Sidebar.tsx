@@ -22,7 +22,12 @@ const NAV_ITEMS = [
   { to: '/einstellungen', icon: Settings, label: 'Einstellungen' },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  isOpen: boolean
+  onClose: () => void
+}
+
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { customer } = useCustomer()
@@ -33,7 +38,12 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="w-64 min-h-screen bg-dark-900 flex flex-col fixed left-0 top-0 z-30">
+    <aside className={`
+      w-64 min-h-screen bg-dark-900 flex flex-col fixed left-0 top-0 z-30
+      transition-transform duration-200
+      ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+      lg:translate-x-0
+    `}>
       {/* Logo */}
       <div className="px-6 py-5 border-b border-white/10">
         <div className="text-white font-bold text-sm leading-tight">
@@ -49,6 +59,7 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
+            onClick={onClose}
             className={({ isActive }) =>
               `sidebar-link${isActive ? ' active' : ''}`
             }

@@ -19,12 +19,15 @@ export function exportToPDF(title: string, data: Record<string, unknown>[], colu
 
   doc.line(14, 42, 196, 42)
 
+  // Distribute columns evenly across the usable page width (14mm … 196mm)
+  const colWidth = Math.floor(182 / columns.length)
+
   // Headers
   let y = 50
   doc.setFontSize(9)
   doc.setFont('helvetica', 'bold')
   columns.forEach((col, i) => {
-    doc.text(col, 14 + i * 45, y)
+    doc.text(col, 14 + i * colWidth, y)
   })
 
   // Data rows
@@ -37,7 +40,8 @@ export function exportToPDF(title: string, data: Record<string, unknown>[], colu
     }
     columns.forEach((col, i) => {
       const val = row[col]
-      doc.text(String(val ?? ''), 14 + i * 45, y)
+      const text = String(val ?? '')
+      doc.text(text, 14 + i * colWidth, y)
     })
     y += 7
   })

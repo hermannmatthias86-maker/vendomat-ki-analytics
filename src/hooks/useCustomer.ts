@@ -19,32 +19,40 @@ export function useCustomer() {
       return
     }
 
-    async function fetchCustomer() {
-      const { data: userRecord } = await supabase
-        .from('users')
-        .select('customer_id, role')
-        .eq('id', user!.id)
-        .single()
+    const fallback: CustomerProfile = {
+      id: user!.id,
+      name: user!.user_metadata?.name || user!.email || 'Unbekannt',
+      contact_email: user!.email ?? null,
+    }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rec = userRecord as any
-      if (rec?.customer_id) {
-        const { data } = await supabase
-          .from('customers')
-          .select('*')
-          .eq('id', rec.customer_id)
-          .single()
+    async function fetchCustomer() {
+      try {
+        const { data: userRecord } = await supabase
+          .from('users')
+          .select('customer_id, role')
+          .eq('id', user!.id)
+          .maybeSingle()
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const c = data as any
-        if (c) setCustomer({ id: c.id, name: c.name, contact_email: c.contact_email ?? null })
-      } else {
-        setCustomer({
-          id: user!.id,
-          name: user!.user_metadata?.name || user!.email || 'Unbekannt',
-          contact_email: user!.email ?? null,
-        })
+        const rec = userRecord as any
+        if (rec?.customer_id) {
+          const { data } = await supabase
+            .from('customers')
+            .select('*')
+            .eq('id', rec.customer_id)
+            .maybeSingle()
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const c = data as any
+          setCustomer(c ? { id: c.id, name: c.name, contact_email: c.contact_email ?? null } : fallback)
+        } else {
+          setCustomer(fallback)
+        }
+      } catch (err) {
+        console.error('[useCustomer] fetchCustomer error:', err)
+        setCustomer(fallback)
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
 
     fetchCustomer()

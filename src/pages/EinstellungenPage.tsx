@@ -124,11 +124,15 @@ export default function EinstellungenPage() {
               <input type="text" value={import.meta.env.VITE_SUPABASE_URL || 'Nicht konfiguriert'} disabled className="input-field bg-gray-50 text-gray-400 font-mono text-xs" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">OpenAI API</label>
-              <input type="text" value={import.meta.env.VITE_OPENAI_API_KEY ? '••••••••••••••••' : 'Nicht konfiguriert'} disabled className="input-field bg-gray-50 text-gray-400" />
+              <label className="block text-xs font-medium text-gray-600 mb-1">Supabase ANON Key</label>
+              <input type="text" value={import.meta.env.VITE_SUPABASE_ANON_KEY ? '••••••••••••••••' : 'Nicht konfiguriert'} disabled className="input-field bg-gray-50 text-gray-400" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">OpenAI API (Produktion: server-seitig)</label>
+              <input type="text" value={import.meta.env.VITE_OPENAI_API_KEY ? '••••••••••••••••  (lokal)' : 'Server-seitig via /api/chat'} disabled className="input-field bg-gray-50 text-gray-400" />
             </div>
           </div>
-          <p className="text-xs text-gray-400">API-Schlüssel werden über Umgebungsvariablen (.env) konfiguriert.</p>
+          <p className="text-xs text-gray-400">In der Produktion wird der OpenAI-Key server-seitig über Vercel-Umgebungsvariablen verwaltet (nicht im Browser sichtbar).</p>
         </div>
       )}
     </div>

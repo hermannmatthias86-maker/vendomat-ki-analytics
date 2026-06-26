@@ -11,13 +11,18 @@ export default function WarengruppenPage() {
   const { customer } = useCustomer()
   const [groups, setGroups] = useState<{ name: string | null; total_revenue: number | null; year: number | null }[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!customer) return
-    fetchProductGroups(customer.id).then((data) => { setGroups(data); setLoading(false) })
+    fetchProductGroups(customer.id)
+      .then((data) => setGroups(data))
+      .catch((err) => { console.error(err); setError(true) })
+      .finally(() => setLoading(false))
   }, [customer])
 
   if (loading) return <LoadingSpinner />
+  if (error) return <EmptyState message="Fehler beim Laden der Warengruppen." />
   if (!groups.length) return <EmptyState message="Noch keine Warengruppen-Daten vorhanden." />
 
   const total = groups.reduce((s, g) => s + (g.total_revenue || 0), 0)

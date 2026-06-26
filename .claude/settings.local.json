@@ -17,7 +17,25 @@
       "Bash(curl -sL https://github.com/cli/cli/releases/download/v2.63.2/gh_2.63.2_linux_amd64.tar.gz -o /tmp/gh.tar.gz)",
       "Bash(tar -xzf /tmp/gh.tar.gz -C /tmp)",
       "Bash(cp /tmp/gh_2.63.2_linux_amd64/bin/gh ~/bin/gh)",
-      "Bash(~/bin/gh --version)"
+      "Bash(~/bin/gh --version)",
+      "Bash(~/bin/gh auth *)",
+      "Bash(~/bin/gh repo *)",
+      "Bash(npx tsc *)",
+      "Skill(run)",
+      "Bash(chromium-cli *)",
+      "Read(//usr/bin/**)",
+      "Bash(pip show *)",
+      "Bash(python3 -c \"from playwright.sync_api import sync_playwright; print\\('playwright ok'\\)\")",
+      "Bash(node -e \"require\\('playwright'\\)\")",
+      "Bash(npx playwright *)",
+      "Bash(SCRATCHPAD=$SCRATCHPAD node *)",
+      "Bash(SCRATCHPAD=__TRACKED_VAR__ node check_pages.js)",
+      "Bash(SCRATCHPAD=__TRACKED_VAR__ node check_pages.cjs)",
+      "Bash(npx oxlint *)",
+      "Bash(curl -sf http://localhost:5173/)",
+      "Bash(node -e \"const l = require\\('/home/matze/vendomat-ki-analytics/node_modules/lucide-react/dist/cjs/lucide-react.js'\\); console.log\\('Menu:', typeof l.Menu\\); console.log\\('Bell:', typeof l.Bell\\); console.log\\('version:', require\\('/home/matze/vendomat-ki-analytics/node_modules/lucide-react/package.json'\\).version\\)\")",
+      "Bash(grep -v \"^$\")",
+      "Bash(node -e \"const p = require\\('/home/matze/vendomat-ki-analytics/node_modules/@supabase/supabase-js/package.json'\\); console.log\\('version:', p.version\\)\")"
     ]
   }
 }
