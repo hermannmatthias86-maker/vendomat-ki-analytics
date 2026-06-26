@@ -74,9 +74,9 @@ async function insertRows(
       customer_id: customerId,
       upload_id: uploadId,
       date: String(r.date ?? '').trim() || null,
-      total_amount: (r.total_amount as number) || null,
-      transaction_count: (r.transaction_count as number) || null,
-      average_receipt: (r.average_receipt as number) || null,
+      total_amount: Number(r.total_amount) || null,
+      transaction_count: Number(r.transaction_count) || null,
+      average_receipt: Number(r.average_receipt) || null,
       year: year || extractYear(r.date),
       month: extractMonth(r.date),
       weekday: extractWeekday(r.date),
@@ -96,8 +96,9 @@ async function insertRows(
       const name = String(r.name ?? '').trim()
       if (!name) continue
       const existing = agg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
-      existing.total_revenue += (r.total_amount as number) || 0
-      existing.total_quantity += (r.total_quantity as number) || 0
+      // Use Number() not `as number` cast – cast doesn't convert at runtime
+      existing.total_revenue += Number(r.total_amount) || 0
+      existing.total_quantity += Number(r.total_quantity) || 0
       agg.set(name, existing)
     }
     const aggregated = Array.from(agg.values()).map((a) => ({
@@ -118,8 +119,8 @@ async function insertRows(
     const prepared = rows.map((r) => ({
       customer_id: customerId,
       name: String(r.name ?? '').trim() || null,
-      total_revenue: (r.total_amount as number) || null,
-      transaction_count: (r.transaction_count as number) || null,
+      total_revenue: Number(r.total_amount) || null,
+      transaction_count: Number(r.transaction_count) || null,
       year: year || null,
     }))
     console.info('[upload] Mitarbeiter vorbereitet:', prepared.length)
@@ -133,8 +134,8 @@ async function insertRows(
     const prepared = rows.map((r) => ({
       customer_id: customerId,
       payment_type: String(r.payment_type ?? '').trim() || null,
-      amount: (r.total_amount as number) || (r.amount as number) || null,
-      percentage: (r.percentage as number) || null,
+      amount: Number(r.total_amount) || Number(r.amount) || null,
+      percentage: Number(r.percentage) || null,
       year: year || null,
     }))
     console.info('[upload] Zahlungsarten vorbereitet:', prepared.length)
@@ -148,7 +149,7 @@ async function insertRows(
     const prepared = rows.map((r) => ({
       customer_id: customerId,
       name: String(r.product_group ?? r.name ?? '').trim() || null,
-      total_revenue: (r.total_amount as number) || null,
+      total_revenue: Number(r.total_amount) || null,
       year: year || null,
     }))
     console.info('[upload] Warengruppen vorbereitet:', prepared.length)

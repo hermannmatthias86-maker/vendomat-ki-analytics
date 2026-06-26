@@ -64,20 +64,27 @@ function normalizeKey(key: unknown): string {
 function parseNumber(raw: unknown): number | null {
   if (raw === null || raw === undefined || raw === '') return null
   if (typeof raw === 'number') return isNaN(raw) ? null : raw
-  const s = String(raw ?? '').trim()
-  if (!s) return null
+  const raw_s = String(raw ?? '').trim()
+  if (!raw_s) return null
+  // Strip Swiss apostrophe thousands separator before validation: 1'234.56 → 1234.56
+  const s = raw_s.replace(/'/g, '')
   // Only parse values that look like pure numbers (digits, separators, optional sign).
   // Prevents "1/2 AFFETTATO LEVENTINESE" or "01.06.2026" from being parsed as a number.
   if (!/^[-+]?[\d.,]+$/.test(s)) return null
-  // German format: "1.234,56" → remove thousands sep '.', replace decimal ',' → '.'
+  // German/Swiss format detection:
+  // "1.234,56" → remove thousands sep '.', replace decimal ',' → '.'
+  // "1234.56" or "1234,56" → straightforward
   let normalized: string
   const hasComma = s.includes(',')
   const hasDot = s.includes('.')
   if (hasComma && hasDot && s.indexOf('.') < s.indexOf(',')) {
+    // German: 1.234,56
     normalized = s.replace(/\./g, '').replace(',', '.')
   } else if (hasComma && !hasDot) {
+    // 1234,56
     normalized = s.replace(',', '.')
   } else {
+    // 1234.56 or 1234
     normalized = s
   }
   const n = parseFloat(normalized.replace(/[^0-9.\-]/g, ''))
@@ -236,7 +243,10 @@ export async function parseFile(file: File): Promise<{
   const yearMatch = String(file.name ?? '').match(/20\d{2}/)
   const year = yearMatch ? parseInt(yearMatch[0]) : undefined
 
+  // Column mapping diagnostic: original header → normalized key
+  const colMap = Object.fromEntries(headers.map((h) => [h, normalizeKey(h)]))
   console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year)
+  console.info('[csvParser] Spalten-Mapping:', JSON.stringify(colMap))
   console.info('[csvParser] Erste 3 Zeilen:', JSON.stringify(rows.slice(0, 3)))
 
   return { type, rows, headers, year, debugInfo }
