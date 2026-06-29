@@ -162,6 +162,7 @@ export async function parseFile(file: File): Promise<{
   rows: ParsedRow[]
   headers: string[]
   year?: number
+  month?: number
   debugInfo?: string
   paymentGroups?: PaymentGroup[]
 }> {
@@ -297,6 +298,14 @@ export async function parseFile(file: File): Promise<{
       ;(rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups = groups
     }
 
+    // Scan pre-header title rows for a date range like "01.06.2026 - 30.06.2026"
+    const preHeaderText = matrix
+      .slice(0, headerRowIdx + 1)
+      .flatMap((r) => (Array.isArray(r) ? r : []))
+      .map((c) => String(c ?? ''))
+      .join(' ')
+    ;(rawRows as unknown as { __preHeaderText?: string }).__preHeaderText = preHeaderText
+
     debugInfo += `, ${rawRows.length} Datenzeilen nach Filterung`
   } else {
     throw new Error(
@@ -336,13 +345,29 @@ export async function parseFile(file: File): Promise<{
   })
 
   const yearMatch = String(file.name ?? '').match(/20\d{2}/)
-  const year = yearMatch ? parseInt(yearMatch[0]) : undefined
+  let year = yearMatch ? parseInt(yearMatch[0]) : undefined
+  let month: number | undefined
+
+  // Extract month/year from pre-header title rows (e.g. "01.06.2026 - 30.06.2026")
+  const preHeaderText = (rawRows as unknown as { __preHeaderText?: string }).__preHeaderText ?? ''
+  const scanText = preHeaderText + ' ' + String(file.name ?? '')
+  // DD.MM.YYYY pattern
+  const dmyMatch = scanText.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/)
+  if (dmyMatch) {
+    month = parseInt(dmyMatch[2])
+    year = year ?? parseInt(dmyMatch[3])
+  }
+  // YYYY-MM-DD fallback
+  if (!month) {
+    const ymdMatch = scanText.match(/(\d{4})-(\d{1,2})-(\d{1,2})/)
+    if (ymdMatch) { year = year ?? parseInt(ymdMatch[1]); month = parseInt(ymdMatch[2]) }
+  }
 
   const colMap = Object.fromEntries(headers.map((h) => [h, normalizeKey(h)]))
-  console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year)
+  console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year, '| Monat:', month)
   console.info('[csvParser] Spalten-Mapping:', JSON.stringify(colMap))
   console.info('[csvParser] Erste 3 Zeilen:', JSON.stringify(rows.slice(0, 3)))
   if (paymentGroups?.length) console.info('[csvParser] Zahlungsgruppen:', JSON.stringify(paymentGroups))
 
-  return { type, rows, headers, year, debugInfo, paymentGroups }
+  return { type, rows, headers, year, month, debugInfo, paymentGroups }
 }

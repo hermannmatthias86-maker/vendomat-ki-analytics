@@ -29,7 +29,7 @@ export async function uploadAndProcess(
   onProgress?.(20)
 
   try {
-    const { type, rows, year, debugInfo, paymentGroups } = await parseFile(file)
+    const { type, rows, year, month, debugInfo, paymentGroups } = await parseFile(file)
     onProgress?.(50)
 
     console.info('[upload] Datei geparst:', { type, year, debugInfo, rowCount: rows.length, customerId })
@@ -42,7 +42,7 @@ export async function uploadAndProcess(
       return { success: false, message: 'Unbekanntes Dateiformat', rowsImported: 0 }
     }
 
-    const rowsImported = await insertRows(type, rows, customerId, uploadRecord.id, year, paymentGroups)
+    const rowsImported = await insertRows(type, rows, customerId, uploadRecord.id, year, month, paymentGroups)
     onProgress?.(90)
 
     console.info('[upload] Import abgeschlossen:', { rowsImported, type })
@@ -125,6 +125,7 @@ async function insertRows(
   customerId: string,
   uploadId: string,
   year?: number,
+  month?: number,
   paymentGroups?: PaymentGroup[]
 ): Promise<number> {
   const BATCH = 100
@@ -149,23 +150,22 @@ async function insertRows(
     }
     return prepared.length
   } else if (type === 'products') {
-    // Aggregate by name – each article appears once per Zahlungsart, sum them all
     const PAYMENT_NAMES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
-    const agg = new Map<string, { name: string; total_revenue: number; total_quantity: number }>()
+
+    // ── 1. Aggregate products by name across all Zahlungsarten ──────────────
+    const productAgg = new Map<string, { name: string; total_revenue: number; total_quantity: number }>()
     for (const r of rows) {
       const name = String(r.name ?? '').trim()
       if (!name) continue
-      // Skip rows whose Name cell contains a payment-type group header that slipped through
       if (PAYMENT_NAMES.some((p) => name.toLowerCase().startsWith(p))) continue
-      const existing = agg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
+      const existing = productAgg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
       existing.total_revenue += Number(r.total_amount) || 0
       existing.total_quantity += Number(r.total_quantity) || 0
-      agg.set(name, existing)
+      productAgg.set(name, existing)
     }
-    const aggregated = Array.from(agg.values()).map((a) => ({
+    const aggregated = Array.from(productAgg.values()).map((a) => ({
       customer_id: customerId,
       name: a.name,
-      // Round to 2 decimals to eliminate floating-point accumulation errors
       total_revenue: Math.round(a.total_revenue * 100) / 100,
       total_quantity: Math.round(a.total_quantity * 100) / 100,
       year: year || null,
@@ -177,18 +177,52 @@ async function insertRows(
       if (error) throw new Error(`Produktdaten-Import fehlgeschlagen: ${error.message}`)
     }
 
-    // Also save payment groups detected from "Umsatz nach Artikel und Abrechnungsart"
-    if (paymentGroups && paymentGroups.length > 0) {
-      const preparedPayments = paymentGroups.map((pg) => ({
+    // ── 2. Payments: compute totals directly from rows (payment_type field) ──
+    // This is more reliable than the paymentGroups array-property approach.
+    const paymentAgg = new Map<string, number>()
+    for (const r of rows) {
+      const pt = String(r.payment_type ?? '').trim()
+      if (!pt) continue
+      const amount = Number(r.total_amount) || 0
+      if (amount > 0) paymentAgg.set(pt, (paymentAgg.get(pt) ?? 0) + amount)
+    }
+    // Fallback: use paymentGroups from csvParser if the row-level approach found nothing
+    if (paymentAgg.size === 0 && paymentGroups && paymentGroups.length > 0) {
+      paymentGroups.forEach((pg) => paymentAgg.set(pg.payment_type, pg.total))
+    }
+    if (paymentAgg.size > 0) {
+      const totalPay = Array.from(paymentAgg.values()).reduce((s, v) => s + v, 0)
+      const preparedPayments = Array.from(paymentAgg.entries()).map(([pt, amount]) => ({
         customer_id: customerId,
-        payment_type: pg.payment_type,
-        amount: pg.total || null,
-        percentage: null,
+        payment_type: pt,
+        amount: Math.round(amount * 100) / 100,
+        percentage: totalPay > 0 ? Math.round((amount / totalPay) * 10000) / 100 : null,
         year: year || null,
       }))
-      console.info('[upload] Zahlungsgruppen aus Artikel-Datei:', preparedPayments.length)
+      console.info('[upload] Zahlungsarten:', preparedPayments)
       const { error: payErr } = await supabase.from('payments').insert(preparedPayments)
-      if (payErr) console.warn('[upload] Zahlungsgruppen-Insert fehlgeschlagen:', payErr.message)
+      if (payErr) console.warn('[upload] Payments-Insert fehlgeschlagen:', payErr.message)
+    } else {
+      console.warn('[upload] Keine Zahlungsarten gefunden – payment_type Felder in Zeilen:', rows.slice(0, 3).map(r => r.payment_type))
+    }
+
+    // ── 3. Sales: one record per upload with the grand total ─────────────────
+    const grandTotal = Math.round(
+      Array.from(productAgg.values()).reduce((s, a) => s + a.total_revenue, 0) * 100
+    ) / 100
+    if (grandTotal > 0) {
+      const uploadDate = new Date().toISOString().slice(0, 10)
+      const { error: salesErr } = await supabase.from('sales').insert({
+        customer_id: customerId,
+        upload_id: uploadId,
+        date: uploadDate,
+        total_amount: grandTotal,
+        year: year || null,
+        month: month || null,
+        weekday: null,
+      })
+      if (salesErr) console.warn('[upload] Sales-Insert fehlgeschlagen:', salesErr.message)
+      else console.info('[upload] Sales-Eintrag gespeichert: CHF', grandTotal, '| Jahr:', year, '| Monat:', month)
     }
 
     return aggregated.length

@@ -23,7 +23,9 @@ export default function WarengruppenPage() {
 
   if (loading) return <LoadingSpinner />
   if (error) return <EmptyState message="Fehler beim Laden der Warengruppen." />
-  if (!groups.length) return <EmptyState message="Noch keine Warengruppen-Daten vorhanden." />
+  if (!groups.length) return (
+    <EmptyState message="Laden Sie einen Warengruppen-Bericht hoch um diese Ansicht zu befüllen. Der Bericht «Umsatz_nach_Artikel_und_Abrechnungsart» enthält keine Warengruppen-Spalte — exportieren Sie dazu einen separaten Warengruppen-Bericht aus Lightspeed." />
+  )
 
   const total = groups.reduce((s, g) => s + (g.total_revenue || 0), 0) || 1
 
