@@ -35,8 +35,6 @@ export function useCustomer() {
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rec = userRecord as any
-        console.info('[useCustomer] auth.uid =', user!.id, '| users-Eintrag:', rec ?? 'KEIN EINTRAG (Fallback auf user.id)')
-
         if (rec?.customer_id) {
           const { data } = await supabase
             .from('customers')
@@ -45,11 +43,8 @@ export function useCustomer() {
             .maybeSingle()
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const c = data as any
-          const resolved = c ? { id: c.id, name: c.name, contact_email: c.contact_email ?? null } : fallback
-          console.info('[useCustomer] customer_id (aus customers-Tabelle):', resolved.id, '| Name:', resolved.name)
-          setCustomer(resolved)
+          setCustomer(c ? { id: c.id, name: c.name, contact_email: c.contact_email ?? null } : fallback)
         } else {
-          console.info('[useCustomer] customer_id (Fallback = user.id):', fallback.id)
           setCustomer(fallback)
         }
       } catch (err) {
@@ -61,7 +56,10 @@ export function useCustomer() {
     }
 
     fetchCustomer()
-  }, [user])
+  // Depend on user.id string, not the user object — auth state changes create
+  // new object references on every event even when the session hasn't changed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   return { customer, loading }
 }

@@ -165,9 +165,9 @@ async function insertRows(
     const aggregated = Array.from(agg.values()).map((a) => ({
       customer_id: customerId,
       name: a.name,
-      // Store 0 explicitly – never null – so ORDER BY DESC puts real zeros after valued rows
-      total_revenue: a.total_revenue,
-      total_quantity: a.total_quantity,
+      // Round to 2 decimals to eliminate floating-point accumulation errors
+      total_revenue: Math.round(a.total_revenue * 100) / 100,
+      total_quantity: Math.round(a.total_quantity * 100) / 100,
       year: year || null,
     }))
     console.info('[upload] Produkte aggregiert:', aggregated.length, '| Beispiel:', JSON.stringify(aggregated[0]))
