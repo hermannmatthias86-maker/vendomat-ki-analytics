@@ -11,11 +11,14 @@ export interface ParsedRow {
 const COLUMN_ALIASES: Record<string, string> = {
   // Date
   buchungsdatum: 'date', 'verkauf datum': 'date', datum: 'date', date: 'date',
-  // Revenue – ordered longest first to prevent short alias shadowing
+  // Revenue – Gesamtumsatz is the definitive total; netto/brutto are separate columns
   gesamtumsatz: 'total_amount', nettoumsatz: 'total_amount', bruttoumsatz: 'total_amount',
   'netto umsatz': 'total_amount', 'brutto umsatz': 'total_amount',
   umsatz: 'total_amount', revenue: 'total_amount', betrag: 'total_amount',
-  netto: 'total_amount',
+  // Per-row subtotals (stored as-is, not used as total_amount)
+  netto: 'netto', brutto: 'brutto', mwst: 'mwst', rabatt: 'rabatt',
+  // Price
+  'preis(chf)': 'price', preis: 'price', price: 'price',
   // Transaction count
   'anzahl transaktionen': 'transaction_count', transaktionen: 'transaction_count',
   belege: 'transaction_count', bons: 'transaction_count',
@@ -61,16 +64,16 @@ function normalizeKey(key: unknown): string {
   return lower.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '') || '_'
 }
 
-function parseNumber(val: unknown): number {
-  if (val === null || val === undefined || val === '') return 0
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseNumber(val: any): number {
   if (typeof val === 'number') return isNaN(val) ? 0 : val
+  if (!val) return 0
   const str = String(val).replace(/'/g, '').replace(/\s/g, '')
   if (!str || !/^[-+]?[\d.,]+$/.test(str)) return 0
-  // German format: 1.234,56 (dot before comma → dot is thousands sep)
+  // German format: 1.234,56 (dot before comma = thousands sep)
   if (str.includes(',') && str.includes('.') && str.indexOf('.') < str.indexOf(',')) {
     return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0
   }
-  // Swiss/standard: 1'234.56 (apostrophe already removed), or 1234,56
   return parseFloat(str.replace(',', '.')) || 0
 }
 
@@ -116,7 +119,7 @@ function detectReportType(headers: string[], filename = ''): ReportType {
 
   const hasDate = n.some((h) => h.includes('datum') || h.includes('date'))
   const hasProduct = n.some((h) =>
-    h.includes('artikel') || h.includes('produkt') || h.includes('bezeichnung'),
+    h.includes('artikel') || h.includes('produkt') || h.includes('bezeichnung') || h === 'name',
   )
   const hasEmployee = n.some((h) => h.includes('mitarbeiter') || h.includes('kassier'))
   const hasPayment = n.some((h) =>
@@ -206,11 +209,12 @@ export async function parseFile(file: File): Promise<{
 
     let currentPaymentType: string | null = null
     const paymentGroupMap = new Map<string, number>()
+    // Index of the Gesamtumsatz column – used to accumulate payment group totals from data rows
+    const totalColIdx = headers.findIndex((h) => normalizeKey(h) === 'total_amount')
 
     for (let i = headerRowIdx + 1; i < matrix.length; i++) {
       const row = Array.isArray(matrix[i]) ? (matrix[i] as unknown[]) : []
       const cells = row.map((c) => String(c ?? '').trim())
-      const firstLower = cells[0]?.toLowerCase() ?? ''
 
       // Detect payment group headers (e.g. "Debitori Im Haus", "Carte Im Haus")
       if (isPaymentGroupHeader(row, headers.length)) {
@@ -218,27 +222,23 @@ export async function parseFile(file: File): Promise<{
         continue
       }
 
-      // Capture subtotal rows to extract payment group totals
-      if (SKIP_ROW_PREFIXES.some((p) => firstLower.startsWith(p)) && currentPaymentType) {
-        const amounts = cells.slice(1)
-          .map((c) => parseNumber(c))
-          .filter((n): n is number => n > 0)
-        if (amounts.length > 0) {
-          const existing = paymentGroupMap.get(currentPaymentType) ?? 0
-          paymentGroupMap.set(currentPaymentType, existing + Math.max(...amounts))
-        }
-      }
-
       if (isSkipRow(row, headers.length)) continue
       const rowStr = row.slice(0, headers.length).map((c) => String(c ?? '').trim()).join('|')
       if (rowStr === headerStr) continue
 
       const obj: Record<string, unknown> = {}
-      headers.forEach((h, j) => {
-        obj[h] = row[j] ?? ''
-      })
+      headers.forEach((h, j) => { obj[h] = row[j] ?? '' })
       if (currentPaymentType) obj.__payment_type = currentPaymentType
       rawRows.push(obj)
+
+      // Accumulate payment group total from the Gesamtumsatz column of each data row
+      if (currentPaymentType && totalColIdx >= 0) {
+        const v = row[totalColIdx]
+        const amount = parseNumber(v)
+        if (amount > 0) {
+          paymentGroupMap.set(currentPaymentType, (paymentGroupMap.get(currentPaymentType) ?? 0) + amount)
+        }
+      }
     }
 
     if (paymentGroupMap.size > 0) {
@@ -246,7 +246,6 @@ export async function parseFile(file: File): Promise<{
         payment_type: pt,
         total,
       }))
-      // Will be attached to the return value below
       ;(rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups = groups
     }
 
@@ -271,14 +270,17 @@ export async function parseFile(file: File): Promise<{
       const val = row[key]
       if (STRING_FIELDS.has(normKey)) {
         normalized[normKey] = String(val ?? '').trim() || null
+      } else if (typeof val === 'number') {
+        // SheetJS returns real JS numbers for numeric Excel cells – use directly
+        normalized[normKey] = isNaN(val) ? null : val
       } else {
         const rawStr = String(val ?? '').trim()
         if (!rawStr) {
           normalized[normKey] = null
         } else {
-          const num = parseNumber(val)
-          // If num is 0 but raw wasn't a zero-like string, keep the string (e.g. non-numeric col)
-          normalized[normKey] = (num !== 0 || /^[-+]?0[.,]?0*$/.test(rawStr)) ? num : (rawStr || null)
+          const num = parseNumber(rawStr)
+          // Only store as number if it actually parsed; otherwise keep as string
+          normalized[normKey] = (num !== 0 || rawStr === '0') ? num : (rawStr || null)
         }
       }
     }
