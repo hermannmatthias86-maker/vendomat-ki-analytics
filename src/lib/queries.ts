@@ -54,6 +54,14 @@ export async function fetchSalesByWeekday(customerId: string) {
 }
 
 export async function fetchTopProducts(customerId: string, year?: number, limit = 5) {
+  // Diagnostic: count ALL products for this customer_id (ignoring revenue filter)
+  // to distinguish "no data inserted" from "data exists but filter too strict"
+  const { count } = await supabase
+    .from('products')
+    .select('*', { count: 'exact', head: true })
+    .eq('customer_id', customerId)
+  console.info('[queries] products Gesamtanzahl für customer_id', customerId, '→', count ?? 'NULL (RLS blockiert oder keine Daten)')
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from('products')

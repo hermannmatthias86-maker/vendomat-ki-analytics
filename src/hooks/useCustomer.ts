@@ -35,6 +35,8 @@ export function useCustomer() {
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rec = userRecord as any
+        console.info('[useCustomer] auth.uid =', user!.id, '| users-Eintrag:', rec ?? 'KEIN EINTRAG (Fallback auf user.id)')
+
         if (rec?.customer_id) {
           const { data } = await supabase
             .from('customers')
@@ -43,8 +45,11 @@ export function useCustomer() {
             .maybeSingle()
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const c = data as any
-          setCustomer(c ? { id: c.id, name: c.name, contact_email: c.contact_email ?? null } : fallback)
+          const resolved = c ? { id: c.id, name: c.name, contact_email: c.contact_email ?? null } : fallback
+          console.info('[useCustomer] customer_id (aus customers-Tabelle):', resolved.id, '| Name:', resolved.name)
+          setCustomer(resolved)
         } else {
+          console.info('[useCustomer] customer_id (Fallback = user.id):', fallback.id)
           setCustomer(fallback)
         }
       } catch (err) {

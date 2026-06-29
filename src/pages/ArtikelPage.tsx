@@ -13,9 +13,13 @@ export default function ArtikelPage() {
 
   useEffect(() => {
     if (!customer) return
+    console.info('[ArtikelPage] Lade Artikel für customer_id:', customer.id)
     fetchTopProducts(customer.id, undefined, 50)
-      .then((data) => setProducts(data))
-      .catch((err) => { console.error(err); setError(true) })
+      .then((data) => {
+        console.info('[ArtikelPage] Ergebnis:', data.length, 'Artikel | Erste 3:', JSON.stringify(data.slice(0, 3)))
+        setProducts(data)
+      })
+      .catch((err) => { console.error('[ArtikelPage] Fehler:', err); setError(true) })
       .finally(() => setLoading(false))
   }, [customer])
 
