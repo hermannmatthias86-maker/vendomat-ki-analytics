@@ -54,14 +54,17 @@ export async function fetchSalesByWeekday(customerId: string) {
 }
 
 export async function fetchTopProducts(customerId: string, year?: number, limit = 5) {
-  let query = supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q: any = supabase
     .from('products')
     .select('name, total_revenue, total_quantity, year')
     .eq('customer_id', customerId)
-    .order('total_revenue', { ascending: false })
+    .not('name', 'is', null)
+    .gt('total_revenue', 0)
+    .order('total_revenue', { ascending: false, nullsFirst: false })
     .limit(limit)
-  if (year) query = query.eq('year', year) as typeof query
-  const { data, error } = await query
+  if (year) q = q.eq('year', year)
+  const { data, error } = await q
   if (error) throw error
   return (data as any[]) || []
 }

@@ -149,14 +149,15 @@ async function insertRows(
     }
     return prepared.length
   } else if (type === 'products') {
-    // Aggregate by name – the same article can appear multiple times
-    // (e.g. once per Zahlungsart in "Umsatz nach Artikel und Abrechnungsart")
+    // Aggregate by name – each article appears once per Zahlungsart, sum them all
+    const PAYMENT_NAMES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
     const agg = new Map<string, { name: string; total_revenue: number; total_quantity: number }>()
     for (const r of rows) {
       const name = String(r.name ?? '').trim()
       if (!name) continue
+      // Skip rows whose Name cell contains a payment-type group header that slipped through
+      if (PAYMENT_NAMES.some((p) => name.toLowerCase().startsWith(p))) continue
       const existing = agg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
-      // Use Number() not `as number` cast – cast doesn't convert at runtime
       existing.total_revenue += Number(r.total_amount) || 0
       existing.total_quantity += Number(r.total_quantity) || 0
       agg.set(name, existing)
@@ -164,8 +165,9 @@ async function insertRows(
     const aggregated = Array.from(agg.values()).map((a) => ({
       customer_id: customerId,
       name: a.name,
-      total_revenue: a.total_revenue || null,
-      total_quantity: a.total_quantity || null,
+      // Store 0 explicitly – never null – so ORDER BY DESC puts real zeros after valued rows
+      total_revenue: a.total_revenue,
+      total_quantity: a.total_quantity,
       year: year || null,
     }))
     console.info('[upload] Produkte aggregiert:', aggregated.length, '| Beispiel:', JSON.stringify(aggregated[0]))
