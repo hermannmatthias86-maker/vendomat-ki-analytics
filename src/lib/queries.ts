@@ -57,7 +57,7 @@ export async function fetchTopProducts(customerId: string, year?: number, limit 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from('products')
-    .select('name, total_revenue, total_quantity, year')
+    .select('name, plu, price, total_revenue, total_quantity, product_group, year, month')
     .eq('customer_id', customerId)
     .not('name', 'is', null)
     .gt('total_revenue', 0)
@@ -72,7 +72,7 @@ export async function fetchTopProducts(customerId: string, year?: number, limit 
 export async function fetchProductGroups(customerId: string, year?: number) {
   let query = supabase
     .from('product_groups')
-    .select('name, total_revenue, year')
+    .select('name, total_revenue, total_quantity, netto, mwst, year, month')
     .eq('customer_id', customerId)
     .order('total_revenue', { ascending: false })
   if (year) query = query.eq('year', year) as typeof query
@@ -84,7 +84,7 @@ export async function fetchProductGroups(customerId: string, year?: number) {
 export async function fetchPayments(customerId: string, year?: number) {
   let query = supabase
     .from('payments')
-    .select('payment_type, amount, percentage, year')
+    .select('payment_type, amount, percentage, transaction_count, year, month')
     .eq('customer_id', customerId)
   if (year) query = query.eq('year', year) as typeof query
   const { data, error } = await query
@@ -95,9 +95,9 @@ export async function fetchPayments(customerId: string, year?: number) {
 export async function fetchEmployees(customerId: string, year?: number) {
   let query = supabase
     .from('employees')
-    .select('name, total_revenue, transaction_count, year')
+    .select('name, total_revenue, transaction_count, storno_count, storno_amount, year, month')
     .eq('customer_id', customerId)
-    .order('total_revenue', { ascending: false })
+    .order('storno_amount', { ascending: true })
   if (year) query = query.eq('year', year) as typeof query
   const { data, error } = await query
   if (error) throw error

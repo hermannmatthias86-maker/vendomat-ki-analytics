@@ -1,373 +1,748 @@
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 
-export type ReportType = 'sales' | 'products' | 'employees' | 'payments' | 'product_groups' | 'unknown'
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
-export interface ParsedRow {
-  [key: string]: string | number | null
+export type ReportType =
+  | 'revenue_by_payment'      // Umsatz_nach_Artikel_und_Abrechnungsart
+  | 'orders_by_group_article' // Bestellungen_nach_Artikelgruppe_und_Artikel
+  | 'orders_by_group'         // Bestellungen_nach_Artikelgruppe_
+  | 'orders_by_article'       // Bestellungen_nach_Artikel_
+  | 'stornos_by_employee'     // Stornos_pro_Mitarbeiter
+  | 'unknown'
+
+export interface FileMeta {
+  reportName?: string
+  exportDate?: string
+  company?: string
+  dateFrom?: string
+  dateTo?: string
+  year?: number
+  month?: number
 }
 
-// Longer/more specific aliases must come before shorter ones that are substrings
-const COLUMN_ALIASES: Record<string, string> = {
-  // Date
-  buchungsdatum: 'date', 'verkauf datum': 'date', datum: 'date', date: 'date',
-  // Revenue – Gesamtumsatz is the definitive total; netto/brutto are separate columns
-  gesamtumsatz: 'total_amount', nettoumsatz: 'total_amount', bruttoumsatz: 'total_amount',
-  'netto umsatz': 'total_amount', 'brutto umsatz': 'total_amount',
-  umsatz: 'total_amount', revenue: 'total_amount', betrag: 'total_amount',
-  // Brutto = Gesamtumsatz in this file layout
-  brutto: 'total_amount',
-  // Per-row subtotals stored under own keys
-  netto: 'netto', mwst: 'mwst', rabatt: 'rabatt',
-  // Price
-  'preis(chf)': 'price', preis: 'price', price: 'price',
-  // Transaction count
-  'anzahl transaktionen': 'transaction_count', transaktionen: 'transaction_count',
-  belege: 'transaction_count', bons: 'transaction_count',
-  // Average receipt
-  'ø bonwert': 'average_receipt', 'durchschnitt bon': 'average_receipt', bonwert: 'average_receipt',
-  // Quantity – must come BEFORE 'artikel' so "anzahl" doesn't fall through to 'name'
-  anzahl: 'total_quantity', menge: 'total_quantity', quantity: 'total_quantity',
-  // Product name (longer ones first)
-  artikelbezeichnung: 'name', 'artikel name': 'name', artikelname: 'name',
-  bezeichnung: 'name', artikel: 'name',
-  // Product group
-  warengruppe: 'product_group', 'artikel gruppe': 'product_group',
-  kategorie: 'product_group', category: 'product_group',
-  // Employee
-  mitarbeiter: 'name', kassier: 'name', kellner: 'name',
-  // Payment type
-  abrechnungsart: 'payment_type', zahlungsart: 'payment_type',
-  'zahlungs art': 'payment_type', zahlung: 'payment_type',
-  // Percentage
-  anteil: 'percentage', prozent: 'percentage',
+export interface ProductRow {
+  name: string
+  plu?: string | null
+  price?: number | null
+  total_revenue: number
+  total_quantity: number
+  netto?: number | null
+  mwst?: number | null
+  product_group?: string | null
+  year?: number | null
+  month?: number | null
 }
+
+export interface ProductGroupRow {
+  name: string
+  total_revenue: number
+  total_quantity?: number | null
+  netto?: number | null
+  mwst?: number | null
+  year?: number | null
+  month?: number | null
+}
+
+export interface PaymentRow {
+  payment_type: string
+  amount: number
+  transaction_count?: number | null
+  percentage?: number | null
+  year?: number | null
+  month?: number | null
+}
+
+export interface SalesRow {
+  total_amount: number
+  transaction_count?: number | null
+  date?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  year?: number | null
+  month?: number | null
+}
+
+export interface EmployeeRow {
+  name: string
+  storno_count?: number | null
+  storno_amount?: number | null
+  year?: number | null
+  month?: number | null
+}
+
+export interface ParsedFile {
+  type: ReportType
+  meta: FileMeta
+  products: ProductRow[]
+  productGroups: ProductGroupRow[]
+  payments: PaymentRow[]
+  sales: SalesRow[]
+  employees: EmployeeRow[]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DATE_RE = /(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/
+const YEAR_RE = /20\d{2}/
+
+const SKIP_PREFIXES = ['gesamt', 'total', 'summe', 'zwischensumme', 'subtotal', 'grand']
+
+const PAYMENT_PREFIXES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
+
+// Branch suffixes to strip from group/article names
+const BRANCH_TERMS = ['im haus', 'asporto', 'takeaway', 'terrasse', 'auslieferung', 'lieferung']
 
 const HEADER_KEYWORDS = [
   'datum', 'date', 'name', 'bezeichnung', 'artikel', 'umsatz', 'gesamtumsatz',
   'menge', 'anzahl', 'mitarbeiter', 'zahlungsart', 'abrechnungsart', 'warengruppe',
-  'netto', 'brutto', 'preis', 'transaktionen', 'betrag', 'bonwert',
+  'netto', 'brutto', 'preis', 'plu', 'filiale', 'gruppe', 'storno',
 ]
 
-const SKIP_ROW_PREFIXES = ['gesamt', 'total', 'summe', 'zwischensumme', 'subtotal', 'grand']
-
-// Date patterns like 01.06.2026 or 2026-06-01 or 2026/06/01
-const DATE_PATTERN = /^\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}$|^\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}$/
-
-// Fields that must always be stored as strings – never parsed as numbers
-const STRING_FIELDS = new Set(['name', 'date', 'payment_type', 'product_group'])
-
-function normalizeKey(key: unknown): string {
-  const lower = String(key ?? '').toLowerCase().trim()
-  const sorted = Object.entries(COLUMN_ALIASES).sort(([a], [b]) => b.length - a.length)
-  for (const [alias, mapped] of sorted) {
-    if (lower.includes(alias)) return mapped
-  }
-  return lower.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '') || '_'
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility functions
+// ─────────────────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseNumber(val: any): number {
+export function parseNumber(val: any): number {
   if (typeof val === 'number') return isNaN(val) ? 0 : val
   if (!val) return 0
-  const str = String(val).replace(/'/g, '').replace(/\s/g, '')
-  if (!str || !/^[-+]?[\d.,]+$/.test(str)) return 0
-  // German format: 1.234,56 (dot before comma = thousands sep)
-  if (str.includes(',') && str.includes('.') && str.indexOf('.') < str.indexOf(',')) {
-    return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0
+  const str = String(val)
+    .replace(/x$/i, '')           // "11x" → "11"
+    .replace(/'/g, '')            // Swiss: 1'234.56 → 1234.56
+    .replace(/\s/g, '')
+    .replace(/\.(?=\d{3}[,.])/g, '') // German: 1.234,56 → remove thousands dot
+    .replace(/\.(?=\d{3}$)/g, '')    // German: 1.234 (no decimal) → 1234
+    .replace(',', '.')
+  return parseFloat(str) || 0
+}
+
+function cellStr(row: unknown[], idx: number): string {
+  return String(row?.[idx] ?? '').trim()
+}
+
+function findCol(headerRow: unknown[], ...keywords: string[]): number {
+  const cells = headerRow.map(c => String(c ?? '').toLowerCase().trim())
+  for (const kw of keywords) {
+    const idx = cells.findIndex(c => c.includes(kw))
+    if (idx >= 0) return idx
   }
-  return parseFloat(str.replace(',', '.')) || 0
+  return -1
 }
 
-function isPaymentGroupHeader(row: unknown[], numHeaderCols: number): boolean {
-  if (numHeaderCols <= 3) return false
-  const cells = row.map((c) => String(c ?? '').trim())
-  const nonEmpty = cells.filter((c) => c !== '').length
-  if (nonEmpty === 0 || nonEmpty > 2) return false
-  if (!cells.slice(1).every((c) => c === '')) return false
-  const first = cells[0]
-  if (!first) return false
-  if (SKIP_ROW_PREFIXES.some((p) => first.toLowerCase().startsWith(p))) return false
-  if (DATE_PATTERN.test(first)) return false
-  return true
+function col(headerRow: unknown[], fallback: number, ...keywords: string[]): number {
+  const found = findCol(headerRow, ...keywords)
+  return found >= 0 ? found : fallback
 }
 
-function isHeaderRow(row: unknown[]): boolean {
-  const cells = row.map((c) => String(c ?? '').toLowerCase().trim())
-  const matches = cells.filter((c) => HEADER_KEYWORDS.some((kw) => c.includes(kw)))
-  return matches.length >= 2
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
 }
 
-function isSkipRow(row: unknown[], numHeaderCols: number): boolean {
-  if (!row || !row.length) return true
-  const cells = row.map((c) => String(c ?? '').trim())
-  const first = String(cells[0] ?? '').toLowerCase()
-  const nonEmpty = cells.filter((c) => c !== '').length
-
-  if (nonEmpty === 0) return true
-  // Subtotal / group footer rows
-  if (SKIP_ROW_PREFIXES.some((p) => first.startsWith(p))) return true
-  // Date-only rows that mark group headers (e.g. "01.06.2026")
-  if (DATE_PATTERN.test(String(cells[0] ?? '').trim())) return true
-  // Rows with only 1–2 filled cells are group headers / footers, not data
-  if (numHeaderCols > 3 && nonEmpty <= 2 && cells.slice(2).every((c) => c === '')) return true
-
-  return false
+// Strip branch suffix like " Im Haus", " Asporto" from product/group names
+function stripBranch(name: string): string {
+  const lower = name.toLowerCase()
+  for (const term of BRANCH_TERMS) {
+    if (lower.endsWith(' ' + term)) {
+      return name.slice(0, name.length - term.length - 1).trim()
+    }
+  }
+  return name.trim()
 }
 
-function detectReportType(headers: string[], filename = ''): ReportType {
-  const n = headers.map((h) => String(h ?? '').toLowerCase())
-  const fn = String(filename ?? '').toLowerCase()
+function isBranchOnly(name: string): boolean {
+  const lower = name.toLowerCase().trim()
+  return BRANCH_TERMS.includes(lower)
+}
 
-  const hasDate = n.some((h) => h.includes('datum') || h.includes('date'))
-  const hasProduct = n.some((h) =>
-    h.includes('artikel') || h.includes('produkt') || h.includes('bezeichnung') || h === 'name',
-  )
-  const hasEmployee = n.some((h) => h.includes('mitarbeiter') || h.includes('kassier'))
-  const hasPayment = n.some((h) =>
-    h.includes('zahlungs') || h.includes('zahlung') || h.includes('abrechnungsart'),
-  )
-  const hasGroup = n.some((h) => h.includes('warengruppe') || h.includes('kategorie'))
-  const hasQuantity = n.some((h) => h.includes('anzahl') || h.includes('menge'))
-  const hasAmount = n.some((h) =>
-    h.includes('umsatz') || h.includes('betrag') || h.includes('netto') || h.includes('brutto'),
-  )
+function isSkipRow(firstCell: string): boolean {
+  const lower = firstCell.toLowerCase()
+  return SKIP_PREFIXES.some(p => lower.startsWith(p))
+}
 
-  if (hasDate && !hasProduct && !hasEmployee) return 'sales'
-  if (hasProduct && !hasEmployee) return 'products'
-  if (hasEmployee) return 'employees'
-  if (hasPayment && !hasProduct) return 'payments'
-  if (hasGroup) return 'product_groups'
+// ─────────────────────────────────────────────────────────────────────────────
+// Metadata extraction (first 15 rows)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Filename hints when headers are ambiguous
-  if (fn.includes('artikel') || fn.includes('produkt')) return 'products'
-  if (fn.includes('mitarbeiter')) return 'employees'
-  if (fn.includes('warengruppe')) return 'product_groups'
-  if (fn.includes('zahlung') || fn.includes('abrechnung')) return 'payments'
+function extractMeta(matrix: unknown[][], filename: string): FileMeta {
+  const meta: FileMeta = {}
+  const rows = matrix.slice(0, 15)
 
-  // "Name + Anzahl/Menge + amount" without a date column = product report
-  const hasName = n.some((h) => h === 'name' || h.includes('bezeichnung'))
-  if (hasName && hasQuantity && hasAmount && !hasDate) return 'products'
+  for (let i = 0; i < rows.length; i++) {
+    const row = Array.isArray(rows[i]) ? rows[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const joined = cells.join(' ')
 
+    // Row 0: report name
+    if (i === 0 && cells[0] && !meta.reportName) {
+      meta.reportName = cells[0]
+    }
+
+    // Look for export date
+    if (joined.toLowerCase().includes('exportiert')) {
+      const m = joined.match(DATE_RE)
+      if (m) meta.exportDate = m[0]
+    }
+
+    // Look for "Vom" / "Von" (dateFrom)
+    const hasVom = cells.some(c => /^(vom|von)$/i.test(c))
+    if (hasVom && !meta.dateFrom) {
+      // Try adjacent cell first
+      for (let j = 0; j < cells.length - 1; j++) {
+        if (/^(vom|von)$/i.test(cells[j])) {
+          const m = cells[j + 1].match(DATE_RE)
+          if (m) { meta.dateFrom = m[0]; break }
+        }
+      }
+      // Fallback: any date in this row
+      if (!meta.dateFrom) {
+        const m = joined.match(DATE_RE)
+        if (m) meta.dateFrom = m[0]
+      }
+    }
+
+    // Look for "Bis" (dateTo)
+    const hasBis = cells.some(c => /^bis$/i.test(c))
+    if (hasBis && !meta.dateTo) {
+      for (let j = 0; j < cells.length - 1; j++) {
+        if (/^bis$/i.test(cells[j])) {
+          const m = cells[j + 1].match(DATE_RE)
+          if (m) { meta.dateTo = m[0]; break }
+        }
+      }
+      if (!meta.dateTo) {
+        const m = joined.match(DATE_RE)
+        if (m) meta.dateTo = m[0]
+      }
+    }
+
+    // Company name: row 1-3, non-empty, no date, no known keywords
+    if (i >= 1 && i <= 3 && cells[0] && !meta.company) {
+      const low = cells[0].toLowerCase()
+      if (!DATE_RE.test(cells[0]) && !low.includes('export') && !low.includes('vom') && !low.includes('bis')) {
+        meta.company = cells[0]
+      }
+    }
+
+    // Extract year/month from any date found in this row
+    for (const cell of cells) {
+      const m = cell.match(DATE_RE)
+      if (m) {
+        meta.year = meta.year ?? parseInt(m[3])
+        meta.month = meta.month ?? parseInt(m[2])
+      }
+    }
+  }
+
+  // Fallback year from filename
+  const yearM = filename.match(YEAR_RE)
+  if (yearM) meta.year = meta.year ?? parseInt(yearM[0])
+
+  return meta
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Header row detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+function findHeaderRow(matrix: unknown[][]): number {
+  for (let i = 0; i < Math.min(matrix.length, 25); i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').toLowerCase().trim())
+    const matches = cells.filter(c => HEADER_KEYWORDS.some(kw => c.includes(kw)))
+    if (matches.length >= 2) return i
+  }
+  return 8 // safe default: most Lightspeed exports have ~8 metadata rows
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Report type detection (filename-based, more specific first)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function detectReportType(filename: string): ReportType {
+  const fn = filename.toLowerCase()
+  if (fn.includes('umsatz_nach_artikel_und_abrechnung')) return 'revenue_by_payment'
+  if (fn.includes('bestellungen_nach_artikelgruppe_und')) return 'orders_by_group_article'
+  if (fn.includes('bestellungen_nach_artikelgruppe_')) return 'orders_by_group'
+  if (fn.includes('bestellungen_nach_artikel_')) return 'orders_by_article'
+  if (fn.includes('stornos_pro_mitarbeiter')) return 'stornos_by_employee'
+  // Looser fallbacks
+  if (fn.includes('umsatz') || fn.includes('abrechnung')) return 'revenue_by_payment'
+  if (fn.includes('warengruppe') && fn.includes('und_artikel')) return 'orders_by_group_article'
+  if (fn.includes('warengruppe')) return 'orders_by_group'
+  if (fn.includes('storno')) return 'stornos_by_employee'
+  if (fn.includes('artikel') || fn.includes('bestellung')) return 'orders_by_article'
   return 'unknown'
 }
 
-export interface PaymentGroup {
-  payment_type: string
-  total: number
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser: revenue_by_payment
+// Umsatz_nach_Artikel_und_Abrechnungsart
+// Structure: payment-group sections (Debitori/Carte/Contanti Im Haus),
+//            each containing article rows (Name, PLU, Anzahl, Netto, Brutto)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseRevenueByPayment(
+  matrix: unknown[][], headerIdx: number, meta: FileMeta
+): { products: ProductRow[]; payments: PaymentRow[]; sales: SalesRow[] } {
+  const hdr = Array.isArray(matrix[headerIdx]) ? matrix[headerIdx] as unknown[] : []
+
+  // Use confirmed Lightspeed column layout with header-based overrides
+  const cName   = col(hdr, 0,  'name', 'bezeichnung')
+  const cPlu    = col(hdr, 1,  'plu')
+  const cQty    = col(hdr, 5,  'anzahl', 'menge')
+  const cNetto  = col(hdr, 10, 'netto')
+  const cBrutto = col(hdr, 12, 'brutto', 'gesamtumsatz')
+
+  const productMap = new Map<string, { name: string; plu: string | null; rev: number; qty: number; netto: number }>()
+  const paymentMap = new Map<string, { amount: number; qty: number }>()
+  let currentPayment: string | null = null
+
+  for (let i = headerIdx + 1; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const name = cellStr(row, cName) || cells[0] || ''
+    if (!name) continue
+
+    const lower = name.toLowerCase()
+    const nonEmpty = cells.filter(c => c !== '').length
+
+    if (isSkipRow(name)) continue
+    // Skip date-only rows
+    if (DATE_RE.test(name) && nonEmpty <= 2) continue
+
+    // Payment group header: known prefix, and almost nothing else in the row
+    const isPayment = PAYMENT_PREFIXES.some(p => lower.startsWith(p))
+    if (isPayment && nonEmpty <= 3) {
+      currentPayment = name
+      continue
+    }
+
+    // Skip structural rows (only 1-2 cells filled, no article data)
+    if (nonEmpty <= 2 && !isPayment) continue
+
+    const brutto = parseNumber(row[cBrutto])
+    if (brutto <= 0) continue
+
+    const plu   = cellStr(row, cPlu) || null
+    const qty   = parseNumber(row[cQty])
+    const netto = parseNumber(row[cNetto])
+
+    // Aggregate by product name
+    const existing = productMap.get(name)
+    if (existing) {
+      existing.rev   += brutto
+      existing.qty   += qty
+      existing.netto += netto
+    } else {
+      productMap.set(name, { name, plu, rev: brutto, qty, netto })
+    }
+
+    // Accumulate per payment type
+    if (currentPayment) {
+      const ep = paymentMap.get(currentPayment) ?? { amount: 0, qty: 0 }
+      ep.amount += brutto
+      ep.qty    += qty
+      paymentMap.set(currentPayment, ep)
+    }
+  }
+
+  const products: ProductRow[] = Array.from(productMap.values()).map(p => ({
+    name: p.name,
+    plu: p.plu,
+    total_revenue: round2(p.rev),
+    total_quantity: round2(p.qty),
+    netto: p.netto ? round2(p.netto) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  const totalAmt = Array.from(paymentMap.values()).reduce((s, v) => s + v.amount, 0)
+  const payments: PaymentRow[] = Array.from(paymentMap.entries()).map(([pt, d]) => ({
+    payment_type: pt,
+    amount: round2(d.amount),
+    transaction_count: d.qty ? Math.round(d.qty) : null,
+    percentage: totalAmt > 0 ? round2(d.amount / totalAmt * 100) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  const grandTotal = round2(totalAmt)
+  const sales: SalesRow[] = grandTotal > 0 ? [{
+    total_amount: grandTotal,
+    date_from: meta.dateFrom ?? null,
+    date_to: meta.dateTo ?? null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }] : []
+
+  return { products, payments, sales }
 }
 
-export async function parseFile(file: File): Promise<{
-  type: ReportType
-  rows: ParsedRow[]
-  headers: string[]
-  year?: number
-  month?: number
-  debugInfo?: string
-  paymentGroups?: PaymentGroup[]
-}> {
-  const ext = String(file.name ?? '').split('.').pop()?.toLowerCase() ?? ''
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser: orders_by_group
+// Bestellungen_nach_Artikelgruppe
+// Each row = one group/branch: "ACQUA Im Haus;1594x;;7913,80;638,20;8552,00"
+// Aggregate multiple branches under the base group name.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  let rawRows: Record<string, unknown>[] = []
-  let headers: string[] = []
-  let debugInfo = ''
+function parseOrdersByGroup(
+  matrix: unknown[][], headerIdx: number, meta: FileMeta
+): { productGroups: ProductGroupRow[] } {
+  const hdr = Array.isArray(matrix[headerIdx]) ? matrix[headerIdx] as unknown[] : []
+
+  const cName   = col(hdr, 0, 'gruppe', 'artikel', 'name', 'bezeichnung')
+  const cQty    = col(hdr, 1, 'anzahl', 'menge')
+  const cNetto  = col(hdr, 3, 'netto')
+  const cMwst   = col(hdr, 4, 'mwst', 'steuer')
+  const cBrutto = col(hdr, 5, 'brutto')
+
+  const groupMap = new Map<string, { rev: number; qty: number; netto: number; mwst: number }>()
+
+  for (let i = headerIdx + 1; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const rawName = cellStr(row, cName) || cells[0] || ''
+
+    if (!rawName || cells.every(c => c === '')) continue
+    if (isSkipRow(rawName)) continue
+
+    const name = stripBranch(rawName)
+    if (!name) continue
+
+    const brutto = parseNumber(row[cBrutto])
+    if (brutto <= 0) continue
+
+    const existing = groupMap.get(name) ?? { rev: 0, qty: 0, netto: 0, mwst: 0 }
+    existing.rev   += brutto
+    existing.qty   += parseNumber(row[cQty])
+    existing.netto += parseNumber(row[cNetto])
+    existing.mwst  += parseNumber(row[cMwst])
+    groupMap.set(name, existing)
+  }
+
+  const productGroups: ProductGroupRow[] = Array.from(groupMap.entries()).map(([name, g]) => ({
+    name,
+    total_revenue: round2(g.rev),
+    total_quantity: g.qty ? round2(g.qty) : null,
+    netto: g.netto ? round2(g.netto) : null,
+    mwst: g.mwst ? round2(g.mwst) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  return { productGroups }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser: orders_by_group_article
+// Bestellungen_nach_Artikelgruppe_und_Artikel
+// 3 levels: Group (no PLU) → Article (PLU present) → Branch (Im Haus/Asporto)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseOrdersByGroupArticle(
+  matrix: unknown[][], headerIdx: number, meta: FileMeta
+): { products: ProductRow[]; productGroups: ProductGroupRow[] } {
+  const hdr = Array.isArray(matrix[headerIdx]) ? matrix[headerIdx] as unknown[] : []
+
+  const cName   = col(hdr, 0, 'name', 'bezeichnung', 'artikel')
+  const cPlu    = col(hdr, 1, 'plu')
+  const cQty    = col(hdr, 2, 'anzahl', 'menge')
+  const cPrice  = col(hdr, 3, 'preis')
+  const cNetto  = col(hdr, 5, 'netto')
+  const cMwst   = col(hdr, 6, 'mwst')
+  const cBrutto = col(hdr, 7, 'brutto', 'gesamtumsatz')
+
+  const productMap = new Map<string, ProductRow & { _rev: number; _qty: number }>()
+  const groupMap   = new Map<string, { rev: number; qty: number; netto: number; mwst: number }>()
+
+  let currentGroup:   string | null = null
+  let currentArticle: string | null = null
+
+  for (let i = headerIdx + 1; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const name = cellStr(row, cName) || cells[0] || ''
+
+    if (!name || cells.every(c => c === '')) continue
+    if (isSkipRow(name)) continue
+
+    const plu    = cellStr(row, cPlu)
+    const lower  = name.toLowerCase()
+    const brutto = parseNumber(row[cBrutto])
+    const qty    = parseNumber(row[cQty])
+    const netto  = parseNumber(row[cNetto])
+    const mwst   = parseNumber(row[cMwst])
+    const price  = parseNumber(row[cPrice])
+
+    if (plu) {
+      // ── Level 2: Article (has PLU) ──────────────────────────────────────
+      currentArticle = name
+      const existing = productMap.get(name)
+      if (existing) {
+        existing._rev += brutto
+        existing._qty += qty
+        existing.total_revenue = round2(existing._rev)
+        existing.total_quantity = round2(existing._qty)
+      } else {
+        productMap.set(name, {
+          name,
+          plu,
+          price: price || null,
+          total_revenue: round2(brutto),
+          total_quantity: round2(qty),
+          netto: netto ? round2(netto) : null,
+          mwst: mwst ? round2(mwst) : null,
+          product_group: currentGroup,
+          year: meta.year ?? null,
+          month: meta.month ?? null,
+          _rev: brutto,
+          _qty: qty,
+        })
+      }
+    } else if (isBranchOnly(lower)) {
+      // ── Level 3: Branch (Im Haus / Asporto) ─────────────────────────────
+      // Aggregate branch numbers into the current article
+      if (currentArticle && productMap.has(currentArticle)) {
+        const p = productMap.get(currentArticle)!
+        if (p._rev === 0 && brutto > 0) {
+          // Article row had no numbers; accumulate from branch rows
+          p._rev += brutto
+          p._qty += qty
+          p.total_revenue = round2(p._rev)
+          p.total_quantity = round2(p._qty)
+        }
+      }
+    } else {
+      // ── Level 1: Group ────────────────────────────────────────────────────
+      // May start with a numeric code like "1000 ACQUA" – strip it
+      const groupName = name.replace(/^\d+\s+/, '').trim() || name
+      currentGroup   = groupName
+      currentArticle = null
+
+      if (brutto > 0 || qty > 0) {
+        const eg = groupMap.get(groupName) ?? { rev: 0, qty: 0, netto: 0, mwst: 0 }
+        eg.rev   += brutto
+        eg.qty   += qty
+        eg.netto += netto
+        eg.mwst  += mwst
+        groupMap.set(groupName, eg)
+      }
+    }
+  }
+
+  const products: ProductRow[] = Array.from(productMap.values()).map(({ _rev, _qty, ...p }) => p)
+
+  const productGroups: ProductGroupRow[] = Array.from(groupMap.entries()).map(([name, g]) => ({
+    name,
+    total_revenue: round2(g.rev),
+    total_quantity: g.qty ? round2(g.qty) : null,
+    netto: g.netto ? round2(g.netto) : null,
+    mwst: g.mwst ? round2(g.mwst) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  return { products, productGroups }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser: orders_by_article
+// Bestellungen_nach_Artikel
+// Columns: Name, PLU, Anzahl, Preis(CHF), Rabatt, Netto, MwSt, Brutto(CHF)
+// Skip date rows like "01.05.2026 Im Haus"
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseOrdersByArticle(
+  matrix: unknown[][], headerIdx: number, meta: FileMeta
+): { products: ProductRow[] } {
+  const hdr = Array.isArray(matrix[headerIdx]) ? matrix[headerIdx] as unknown[] : []
+
+  const cName   = col(hdr, 0, 'name', 'bezeichnung')
+  const cPlu    = col(hdr, 1, 'plu')
+  const cQty    = col(hdr, 2, 'anzahl', 'menge')
+  const cPrice  = col(hdr, 3, 'preis')
+  const cNetto  = col(hdr, 5, 'netto')
+  const cMwst   = col(hdr, 6, 'mwst')
+  const cBrutto = col(hdr, 7, 'brutto', 'gesamtumsatz')
+
+  const productMap = new Map<string, { rev: number; qty: number; plu: string | null; price: number | null; netto: number; mwst: number }>()
+
+  for (let i = headerIdx + 1; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const name = cellStr(row, cName) || cells[0] || ''
+
+    if (!name || cells.every(c => c === '')) continue
+    if (isSkipRow(name)) continue
+
+    // Skip date rows: "01.05.2026 Im Haus" or standalone dates
+    const firstWord = name.split(' ')[0]
+    if (DATE_RE.test(firstWord) || DATE_RE.test(name)) continue
+
+    const brutto = parseNumber(row[cBrutto])
+    if (brutto <= 0) continue
+
+    const existing = productMap.get(name)
+    if (existing) {
+      existing.rev   += brutto
+      existing.qty   += parseNumber(row[cQty])
+      existing.netto += parseNumber(row[cNetto])
+      existing.mwst  += parseNumber(row[cMwst])
+    } else {
+      productMap.set(name, {
+        rev: brutto,
+        qty: parseNumber(row[cQty]),
+        plu: cellStr(row, cPlu) || null,
+        price: parseNumber(row[cPrice]) || null,
+        netto: parseNumber(row[cNetto]),
+        mwst: parseNumber(row[cMwst]),
+      })
+    }
+  }
+
+  const products: ProductRow[] = Array.from(productMap.entries()).map(([name, p]) => ({
+    name,
+    plu: p.plu,
+    price: p.price,
+    total_revenue: round2(p.rev),
+    total_quantity: round2(p.qty),
+    netto: p.netto ? round2(p.netto) : null,
+    mwst: p.mwst ? round2(p.mwst) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  return { products }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser: stornos_by_employee
+// Stornos_pro_Mitarbeiter_und_Tag
+// Level 1: Employee name row (text only, no numbers)
+// Level 2: Date rows with storno amounts (negative brutto)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseStornosByEmployee(
+  matrix: unknown[][], headerIdx: number, meta: FileMeta
+): { employees: EmployeeRow[] } {
+  const hdr = Array.isArray(matrix[headerIdx]) ? matrix[headerIdx] as unknown[] : []
+
+  const cQty    = col(hdr, 2, 'anzahl', 'menge')
+  const cBrutto = col(hdr, 5, 'brutto')
+
+  const employeeMap = new Map<string, { count: number; amount: number }>()
+  let currentEmployee: string | null = null
+
+  // Start from max(headerIdx+1, 0) to handle files with no clear header
+  const startRow = Math.max(0, headerIdx + 1)
+
+  for (let i = startRow; i < matrix.length; i++) {
+    const row = Array.isArray(matrix[i]) ? matrix[i] as unknown[] : []
+    const cells = row.map(c => String(c ?? '').trim())
+    const name = cells[0] || ''
+
+    if (!name || cells.every(c => c === '')) continue
+    if (isSkipRow(name)) continue
+
+    const nonEmpty   = cells.filter(c => c !== '').length
+    const hasNumbers = cells.slice(1).some(c => /^-?[\d.,]+$/.test(c.replace(/'/g, '')))
+    const isDate     = DATE_RE.test(name) || DATE_RE.test(name.split(' ')[0])
+
+    if (!hasNumbers && !isDate && nonEmpty <= 2) {
+      // Level 1: Employee name row
+      currentEmployee = name
+      if (!employeeMap.has(name)) {
+        employeeMap.set(name, { count: 0, amount: 0 })
+      }
+    } else if (currentEmployee && (isDate || hasNumbers)) {
+      // Level 2: Storno detail (date + branch + qty + amounts)
+      const brutto = parseNumber(row[cBrutto])
+      const qty    = Math.abs(parseNumber(row[cQty]))
+      const ep     = employeeMap.get(currentEmployee)!
+      ep.amount += brutto
+      ep.count  += qty || 1
+    }
+  }
+
+  const employees: EmployeeRow[] = Array.from(employeeMap.entries()).map(([name, d]) => ({
+    name,
+    storno_count: d.count || null,
+    storno_amount: d.amount ? round2(d.amount) : null,
+    year: meta.year ?? null,
+    month: meta.month ?? null,
+  }))
+
+  return { employees }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function parseFile(file: File): Promise<ParsedFile> {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  const type = detectReportType(file.name)
+
+  if (ext !== 'xlsx' && ext !== 'xls' && ext !== 'csv') {
+    throw new Error(`Nicht unterstütztes Format ".${ext}". Bitte XLS, XLSX oder CSV verwenden.`)
+  }
+
+  let matrix: unknown[][] = []
 
   if (ext === 'csv') {
     const text = await file.text()
-    const result = Papa.parse<Record<string, string>>(text, {
-      header: true,
-      skipEmptyLines: true,
-      dynamicTyping: false,
-    })
-    rawRows = result.data as Record<string, unknown>[]
-    headers = (result.meta.fields || []).map((f) => String(f ?? ''))
-    debugInfo = `CSV: ${rawRows.length} Zeilen, Spalten: ${headers.join(', ')}`
-  } else if (ext === 'xlsx' || ext === 'xls') {
+    const result = Papa.parse<string[]>(text, { header: false, skipEmptyLines: false, delimiter: '' })
+    matrix = result.data as unknown[][]
+  } else {
     const buffer = await file.arrayBuffer()
     const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
     const sheetName = workbook.SheetNames[0]
     if (!sheetName) throw new Error('Excel-Datei enthält keine Tabellen.')
-    const sheet = workbook.Sheets[sheetName]
-
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-      header: 1,
-      defval: '',
-      blankrows: false,
+    matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+      header: 1, defval: '', blankrows: false,
     })
-
-    // Find the actual data header row (first row with >= 2 known column keyword matches)
-    let headerRowIdx = 0
-    for (let i = 0; i < Math.min(matrix.length, 25); i++) {
-      const row = matrix[i]
-      if (Array.isArray(row) && isHeaderRow(row)) {
-        headerRowIdx = i
-        break
-      }
-    }
-
-    const rawHeaderRow = Array.isArray(matrix[headerRowIdx]) ? (matrix[headerRowIdx] as unknown[]) : []
-
-    // Build header map preserving ORIGINAL column indices (filter(Boolean) would break index alignment)
-    const headerMapping: { name: string; colIdx: number }[] = []
-    rawHeaderRow.forEach((c, idx) => {
-      const h = String(c ?? '').trim()
-      if (h) headerMapping.push({ name: h, colIdx: idx })
-    })
-    headers = headerMapping.map((m) => m.name)
-    const totalCols = rawHeaderRow.length  // full width including empty columns
-
-    // headerStr for duplicate-row detection uses only non-empty header names
-    const headerStr = headers.join('|')
-    debugInfo = `XLS: Headerzeile ${headerRowIdx}, Spalten: ${headers.join(', ')} (total cols: ${totalCols})`
-
-    // Resolve which raw column index holds the total_amount (Brutto/Gesamtumsatz)
-    // Primary: from header mapping; Fallback: col 12 per confirmed file layout
-    let totalColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'total_amount')?.colIdx ?? -1
-    if (totalColIdx < 0 && totalCols >= 13) totalColIdx = 12
-
-    // Same for quantity (Anzahl = col 5) and netto (col 10)
-    const quantityColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'total_quantity')?.colIdx
-      ?? (totalCols >= 6 ? 5 : -1)
-    const nettoColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'netto')?.colIdx
-      ?? (totalCols >= 11 ? 10 : -1)
-
-    let currentPaymentType: string | null = null
-    const paymentGroupMap = new Map<string, number>()
-    // Known payment type prefixes
-    const PAYMENT_PREFIXES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
-
-    for (let i = headerRowIdx + 1; i < matrix.length; i++) {
-      const row = Array.isArray(matrix[i]) ? (matrix[i] as unknown[]) : []
-      const cells = row.map((c) => String(c ?? '').trim())
-      const firstName = cells[0] ?? ''
-      const firstLower = firstName.toLowerCase()
-
-      // Payment group header: first cell has text, everything else empty, not a data row
-      // Also catch known payment type keywords explicitly
-      const isKnownPayment = PAYMENT_PREFIXES.some((p) => firstLower.startsWith(p))
-      if (isKnownPayment || isPaymentGroupHeader(row, totalCols)) {
-        currentPaymentType = firstName
-        continue
-      }
-
-      // Skip total/summary rows and empty rows
-      if (isSkipRow(row, totalCols)) continue
-
-      // Skip repeated header rows
-      const rowStr = headerMapping.map((m) => String(row[m.colIdx] ?? '').trim()).join('|')
-      if (rowStr === headerStr) continue
-
-      // Skip rows where col 0 (Name) is empty – these are filler/structure rows
-      if (!firstName) continue
-
-      const obj: Record<string, unknown> = {}
-      // Map using ORIGINAL column indices to avoid empty-column offset bugs
-      headerMapping.forEach(({ name, colIdx }) => { obj[name] = row[colIdx] ?? '' })
-
-      // Index-based fallbacks for sparse files where header detection may miss columns
-      if (obj['Anzahl'] === '' || obj['Anzahl'] === undefined) {
-        const v = row[quantityColIdx]
-        if (v !== '' && v !== undefined) obj['Anzahl'] = v
-      }
-      if (obj['Brutto'] === '' || obj['Brutto'] === undefined) {
-        const v = row[totalColIdx]
-        if (v !== '' && v !== undefined) obj['Brutto'] = v
-      }
-      if (obj['Netto'] === '' || obj['Netto'] === undefined) {
-        const v = row[nettoColIdx]
-        if (v !== '' && v !== undefined) obj['Netto'] = v
-      }
-
-      if (currentPaymentType) obj.__payment_type = currentPaymentType
-      rawRows.push(obj)
-
-      // Accumulate payment group total from the Brutto/Gesamtumsatz column
-      if (currentPaymentType && totalColIdx >= 0) {
-        const amount = parseNumber(row[totalColIdx])
-        if (amount > 0) {
-          paymentGroupMap.set(currentPaymentType, (paymentGroupMap.get(currentPaymentType) ?? 0) + amount)
-        }
-      }
-    }
-
-    if (paymentGroupMap.size > 0) {
-      const groups: PaymentGroup[] = Array.from(paymentGroupMap.entries()).map(([pt, total]) => ({
-        payment_type: pt,
-        total,
-      }))
-      ;(rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups = groups
-    }
-
-    // Scan pre-header title rows for a date range like "01.06.2026 - 30.06.2026"
-    const preHeaderText = matrix
-      .slice(0, headerRowIdx + 1)
-      .flatMap((r) => (Array.isArray(r) ? r : []))
-      .map((c) => String(c ?? ''))
-      .join(' ')
-    ;(rawRows as unknown as { __preHeaderText?: string }).__preHeaderText = preHeaderText
-
-    debugInfo += `, ${rawRows.length} Datenzeilen nach Filterung`
-  } else {
-    throw new Error(
-      `Nicht unterstütztes Dateiformat ".${ext}". Bitte CSV, XLSX oder XLS verwenden.`,
-    )
   }
 
-  const type = detectReportType(headers, String(file.name ?? ''))
+  const headerIdx = findHeaderRow(matrix)
+  const meta      = extractMeta(matrix, file.name)
 
-  // Extract paymentGroups that were attached during XLS parsing
-  const attachedGroups = (rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups
-  const paymentGroups: PaymentGroup[] | undefined = attachedGroups
+  console.info('[csvParser] Typ:', type, '| Headerzeile:', headerIdx, '| Meta:', JSON.stringify(meta))
 
-  const rows: ParsedRow[] = rawRows.map((row) => {
-    const normalized: ParsedRow = {}
-    for (const key in row) {
-      if (key === '__paymentGroups') continue
-      const normKey = normalizeKey(key)
-      const val = row[key]
-      if (STRING_FIELDS.has(normKey)) {
-        normalized[normKey] = String(val ?? '').trim() || null
-      } else if (typeof val === 'number') {
-        // SheetJS returns real JS numbers for numeric Excel cells – use directly
-        normalized[normKey] = isNaN(val) ? null : val
-      } else {
-        const rawStr = String(val ?? '').trim()
-        if (!rawStr) {
-          normalized[normKey] = null
-        } else {
-          const num = parseNumber(rawStr)
-          // Only store as number if it actually parsed; otherwise keep as string
-          normalized[normKey] = (num !== 0 || rawStr === '0') ? num : (rawStr || null)
-        }
-      }
+  const empty: ParsedFile = { type, meta, products: [], productGroups: [], payments: [], sales: [], employees: [] }
+
+  switch (type) {
+    case 'revenue_by_payment': {
+      const { products, payments, sales } = parseRevenueByPayment(matrix, headerIdx, meta)
+      console.info('[csvParser] Produkte:', products.length, '| Zahlungsarten:', payments.length, '| Sales:', sales.length)
+      return { ...empty, products, payments, sales }
     }
-    return normalized
-  })
-
-  const yearMatch = String(file.name ?? '').match(/20\d{2}/)
-  let year = yearMatch ? parseInt(yearMatch[0]) : undefined
-  let month: number | undefined
-
-  // Extract month/year from pre-header title rows (e.g. "01.06.2026 - 30.06.2026")
-  const preHeaderText = (rawRows as unknown as { __preHeaderText?: string }).__preHeaderText ?? ''
-  const scanText = preHeaderText + ' ' + String(file.name ?? '')
-  // DD.MM.YYYY pattern
-  const dmyMatch = scanText.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/)
-  if (dmyMatch) {
-    month = parseInt(dmyMatch[2])
-    year = year ?? parseInt(dmyMatch[3])
+    case 'orders_by_group': {
+      const { productGroups } = parseOrdersByGroup(matrix, headerIdx, meta)
+      console.info('[csvParser] Warengruppen:', productGroups.length)
+      return { ...empty, productGroups }
+    }
+    case 'orders_by_group_article': {
+      const { products, productGroups } = parseOrdersByGroupArticle(matrix, headerIdx, meta)
+      console.info('[csvParser] Produkte:', products.length, '| Warengruppen:', productGroups.length)
+      return { ...empty, products, productGroups }
+    }
+    case 'orders_by_article': {
+      const { products } = parseOrdersByArticle(matrix, headerIdx, meta)
+      console.info('[csvParser] Produkte:', products.length)
+      return { ...empty, products }
+    }
+    case 'stornos_by_employee': {
+      const { employees } = parseStornosByEmployee(matrix, headerIdx, meta)
+      console.info('[csvParser] Mitarbeiter:', employees.length)
+      return { ...empty, employees }
+    }
+    default:
+      console.warn('[csvParser] Unbekannter Berichtstyp für Datei:', file.name)
+      return empty
   }
-  // YYYY-MM-DD fallback
-  if (!month) {
-    const ymdMatch = scanText.match(/(\d{4})-(\d{1,2})-(\d{1,2})/)
-    if (ymdMatch) { year = year ?? parseInt(ymdMatch[1]); month = parseInt(ymdMatch[2]) }
-  }
-
-  const colMap = Object.fromEntries(headers.map((h) => [h, normalizeKey(h)]))
-  console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year, '| Monat:', month)
-  console.info('[csvParser] Spalten-Mapping:', JSON.stringify(colMap))
-  console.info('[csvParser] Erste 3 Zeilen:', JSON.stringify(rows.slice(0, 3)))
-  if (paymentGroups?.length) console.info('[csvParser] Zahlungsgruppen:', JSON.stringify(paymentGroups))
-
-  return { type, rows, headers, year, month, debugInfo, paymentGroups }
 }

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { parseFile, type ParsedRow, type ReportType, type PaymentGroup } from './csvParser'
+import { parseFile, type ParsedFile } from './csvParser'
 import { generateAIInsights } from './openai'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -25,35 +25,40 @@ export async function uploadAndProcess(
     .single()
 
   if (uploadError) throw new Error(uploadError.message || JSON.stringify(uploadError))
-  const uploadRecord = upload as any
+  const uploadId = (upload as any).id
   onProgress?.(20)
 
   try {
-    const { type, rows, year, month, debugInfo, paymentGroups } = await parseFile(file)
+    const parsed = await parseFile(file)
     onProgress?.(50)
 
-    console.info('[upload] Datei geparst:', { type, year, debugInfo, rowCount: rows.length, customerId })
-    if (rows.length > 0) {
-      console.info('[upload] Beispiel-Zeile:', JSON.stringify(rows[0]))
+    console.info('[upload] Datei geparst:', {
+      type: parsed.type,
+      meta: parsed.meta,
+      products: parsed.products.length,
+      productGroups: parsed.productGroups.length,
+      payments: parsed.payments.length,
+      sales: parsed.sales.length,
+      employees: parsed.employees.length,
+    })
+
+    if (parsed.type === 'unknown') {
+      await supabase.from('uploads').update({ status: 'error' }).eq('id', uploadId)
+      return { success: false, message: 'Unbekanntes Dateiformat — Dateiname muss Berichtstyp enthalten (z.B. Bestellungen_nach_Artikel_...)', rowsImported: 0 }
     }
 
-    if (type === 'unknown') {
-      await supabase.from('uploads').update({ status: 'error' }).eq('id', uploadRecord.id)
-      return { success: false, message: 'Unbekanntes Dateiformat', rowsImported: 0 }
-    }
-
-    const rowsImported = await insertRows(type, rows, customerId, uploadRecord.id, year, month, paymentGroups)
+    const rowsImported = await insertAll(parsed, customerId, uploadId)
     onProgress?.(90)
 
-    console.info('[upload] Import abgeschlossen:', { rowsImported, type })
+    console.info('[upload] Import abgeschlossen:', rowsImported, 'Datensätze')
 
     await supabase
       .from('uploads')
-      .update({ status: 'done', report_type: type, year: year || null })
-      .eq('id', uploadRecord.id)
+      .update({ status: 'done', report_type: parsed.type, year: parsed.meta.year || null })
+      .eq('id', uploadId)
 
-    // Auto-trigger AI analysis after products or payments upload
-    if (rowsImported > 0 && (type === 'products' || type === 'payments' || type === 'sales')) {
+    // Auto AI analysis after any upload with product or sales data
+    if (rowsImported > 0) {
       triggerAutoAIAnalysis(customerId).catch((err) =>
         console.warn('[upload] Auto-KI-Analyse fehlgeschlagen:', err)
       )
@@ -63,10 +68,124 @@ export async function uploadAndProcess(
     return { success: true, message: `${rowsImported} Datensätze importiert`, rowsImported }
   } catch (err) {
     console.error('[upload] Fehler:', err)
-    await supabase.from('uploads').update({ status: 'error' }).eq('id', uploadRecord.id)
+    await supabase.from('uploads').update({ status: 'error' }).eq('id', uploadId)
     throw err
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Insert all parsed data into the appropriate tables
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function insertAll(parsed: ParsedFile, customerId: string, uploadId: string): Promise<number> {
+  const BATCH = 100
+  let total = 0
+
+  // ── Products ─────────────────────────────────────────────────────────────
+  if (parsed.products.length > 0) {
+    const rows = parsed.products.map(p => ({
+      customer_id: customerId,
+      name: p.name,
+      plu: p.plu ?? null,
+      price: p.price ?? null,
+      total_revenue: p.total_revenue,
+      total_quantity: p.total_quantity,
+      netto: p.netto ?? null,
+      mwst: p.mwst ?? null,
+      product_group: p.product_group ?? null,
+      year: p.year ?? null,
+      month: p.month ?? null,
+    }))
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const { error } = await supabase.from('products').insert(rows.slice(i, i + BATCH))
+      if (error) throw new Error(`Produkte: ${error.message}`)
+    }
+    total += rows.length
+    console.info('[upload] Produkte gespeichert:', rows.length)
+  }
+
+  // ── Product groups ────────────────────────────────────────────────────────
+  if (parsed.productGroups.length > 0) {
+    const rows = parsed.productGroups.map(g => ({
+      customer_id: customerId,
+      name: g.name,
+      total_revenue: g.total_revenue,
+      total_quantity: g.total_quantity ?? null,
+      netto: g.netto ?? null,
+      mwst: g.mwst ?? null,
+      year: g.year ?? null,
+      month: g.month ?? null,
+    }))
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const { error } = await supabase.from('product_groups').insert(rows.slice(i, i + BATCH))
+      if (error) throw new Error(`Warengruppen: ${error.message}`)
+    }
+    total += rows.length
+    console.info('[upload] Warengruppen gespeichert:', rows.length)
+  }
+
+  // ── Payments ──────────────────────────────────────────────────────────────
+  if (parsed.payments.length > 0) {
+    const rows = parsed.payments.map(p => ({
+      customer_id: customerId,
+      payment_type: p.payment_type,
+      amount: p.amount,
+      transaction_count: p.transaction_count ?? null,
+      percentage: p.percentage ?? null,
+      year: p.year ?? null,
+      month: p.month ?? null,
+    }))
+    const { error } = await supabase.from('payments').insert(rows)
+    if (error) throw new Error(`Zahlungsarten: ${error.message}`)
+    total += rows.length
+    console.info('[upload] Zahlungsarten gespeichert:', rows.length)
+  }
+
+  // ── Sales ─────────────────────────────────────────────────────────────────
+  if (parsed.sales.length > 0) {
+    const today = new Date().toISOString().slice(0, 10)
+    const rows = parsed.sales.map(s => ({
+      customer_id: customerId,
+      upload_id: uploadId,
+      date: s.date ?? today,
+      total_amount: s.total_amount,
+      transaction_count: s.transaction_count ?? null,
+      date_from: s.date_from ?? null,
+      date_to: s.date_to ?? null,
+      year: s.year ?? null,
+      month: s.month ?? null,
+      weekday: null,
+    }))
+    const { error } = await supabase.from('sales').insert(rows)
+    if (error) throw new Error(`Umsätze: ${error.message}`)
+    total += rows.length
+    console.info('[upload] Umsätze gespeichert: CHF', rows[0]?.total_amount, '| Jahr:', rows[0]?.year, '| Monat:', rows[0]?.month)
+  }
+
+  // ── Employees (stornos) ───────────────────────────────────────────────────
+  if (parsed.employees.length > 0) {
+    const rows = parsed.employees.map(e => ({
+      customer_id: customerId,
+      name: e.name,
+      storno_count: e.storno_count ?? null,
+      storno_amount: e.storno_amount ?? null,
+      year: e.year ?? null,
+      month: e.month ?? null,
+    }))
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const { error } = await supabase.from('employees').insert(rows.slice(i, i + BATCH))
+      if (error) throw new Error(`Mitarbeiter: ${error.message}`)
+    }
+    total += rows.length
+    console.info('[upload] Mitarbeiter/Stornos gespeichert:', rows.length)
+  }
+
+  return total
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto AI analysis after upload
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function triggerAutoAIAnalysis(customerId: string): Promise<void> {
   const { data: salesData } = await supabase
@@ -87,16 +206,15 @@ async function triggerAutoAIAnalysis(customerId: string): Promise<void> {
     .eq('id', customerId)
     .maybeSingle()
 
-  const sales = (salesData as any[]) || []
-  const products = (productsData as any[]) || []
+  const sales      = (salesData as any[]) || []
+  const products   = (productsData as any[]) || []
   const customerName = (customerData as any)?.name || 'Kunde'
 
-  const totalRevenue = sales.reduce((s: number, r: any) => s + (r.total_amount || 0), 0)
+  const totalRevenue     = sales.reduce((s: number, r: any) => s + (r.total_amount || 0), 0)
   const totalTransactions = sales.reduce((s: number, r: any) => s + (r.transaction_count || 0), 0)
-  const avgReceipt = totalTransactions ? totalRevenue / totalTransactions : 0
-  const years = [...new Set(sales.map((r: any) => r.year).filter(Boolean))]
-
-  const top5 = products.map((p: any) => `${p.name}: CHF ${(p.total_revenue || 0).toFixed(2)}`).join(', ')
+  const avgReceipt       = totalTransactions ? totalRevenue / totalTransactions : 0
+  const years            = [...new Set(sales.map((r: any) => r.year).filter(Boolean))]
+  const top5             = products.map((p: any) => `${p.name}: CHF ${(p.total_revenue || 0).toFixed(2)}`).join(', ')
 
   const kpiData =
     `Gesamtumsatz: CHF ${totalRevenue.toFixed(2)}, ` +
@@ -117,198 +235,4 @@ async function triggerAutoAIAnalysis(customerId: string): Promise<void> {
 
   await supabase.from('ai_results').insert(inserts)
   console.info('[upload] Auto-KI-Analyse gespeichert:', inserts.length, 'Einträge')
-}
-
-async function insertRows(
-  type: ReportType,
-  rows: ParsedRow[],
-  customerId: string,
-  uploadId: string,
-  year?: number,
-  month?: number,
-  paymentGroups?: PaymentGroup[]
-): Promise<number> {
-  const BATCH = 100
-
-  if (type === 'sales') {
-    const prepared = rows.map((r) => ({
-      customer_id: customerId,
-      upload_id: uploadId,
-      date: String(r.date ?? '').trim() || null,
-      total_amount: Number(r.total_amount) || null,
-      transaction_count: Number(r.transaction_count) || null,
-      average_receipt: Number(r.average_receipt) || null,
-      year: year || extractYear(r.date),
-      month: extractMonth(r.date),
-      weekday: extractWeekday(r.date),
-    }))
-    console.info('[upload] Sales-Zeilen vorbereitet:', prepared.length, '| Beispiel:', JSON.stringify(prepared[0]))
-    for (let i = 0; i < prepared.length; i += BATCH) {
-      const { data, error } = await supabase.from('sales').insert(prepared.slice(i, i + BATCH)).select('id')
-      console.info('[upload] Sales insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
-      if (error) throw new Error(error.message || JSON.stringify(error))
-    }
-    return prepared.length
-  } else if (type === 'products') {
-    const PAYMENT_NAMES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
-
-    // ── 1. Aggregate products by name across all Zahlungsarten ──────────────
-    const productAgg = new Map<string, { name: string; total_revenue: number; total_quantity: number }>()
-    for (const r of rows) {
-      const name = String(r.name ?? '').trim()
-      if (!name) continue
-      if (PAYMENT_NAMES.some((p) => name.toLowerCase().startsWith(p))) continue
-      const existing = productAgg.get(name) ?? { name, total_revenue: 0, total_quantity: 0 }
-      existing.total_revenue += Number(r.total_amount) || 0
-      existing.total_quantity += Number(r.total_quantity) || 0
-      productAgg.set(name, existing)
-    }
-    const aggregated = Array.from(productAgg.values()).map((a) => ({
-      customer_id: customerId,
-      name: a.name,
-      total_revenue: Math.round(a.total_revenue * 100) / 100,
-      total_quantity: Math.round(a.total_quantity * 100) / 100,
-      year: year || null,
-    }))
-    console.info('[upload] Produkte aggregiert:', aggregated.length, '| Beispiel:', JSON.stringify(aggregated[0]))
-    for (let i = 0; i < aggregated.length; i += BATCH) {
-      const { data, error } = await supabase.from('products').insert(aggregated.slice(i, i + BATCH)).select('id')
-      console.info('[upload] Products insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
-      if (error) throw new Error(`Produktdaten-Import fehlgeschlagen: ${error.message}`)
-    }
-
-    // ── 2. Payments: compute totals directly from rows (payment_type field) ──
-    // This is more reliable than the paymentGroups array-property approach.
-    const paymentAgg = new Map<string, number>()
-    for (const r of rows) {
-      const pt = String(r.payment_type ?? '').trim()
-      if (!pt) continue
-      const amount = Number(r.total_amount) || 0
-      if (amount > 0) paymentAgg.set(pt, (paymentAgg.get(pt) ?? 0) + amount)
-    }
-    // Fallback: use paymentGroups from csvParser if the row-level approach found nothing
-    if (paymentAgg.size === 0 && paymentGroups && paymentGroups.length > 0) {
-      paymentGroups.forEach((pg) => paymentAgg.set(pg.payment_type, pg.total))
-    }
-    if (paymentAgg.size > 0) {
-      const totalPay = Array.from(paymentAgg.values()).reduce((s, v) => s + v, 0)
-      const preparedPayments = Array.from(paymentAgg.entries()).map(([pt, amount]) => ({
-        customer_id: customerId,
-        payment_type: pt,
-        amount: Math.round(amount * 100) / 100,
-        percentage: totalPay > 0 ? Math.round((amount / totalPay) * 10000) / 100 : null,
-        year: year || null,
-      }))
-      console.info('[upload] Zahlungsarten:', preparedPayments)
-      const { error: payErr } = await supabase.from('payments').insert(preparedPayments)
-      if (payErr) console.warn('[upload] Payments-Insert fehlgeschlagen:', payErr.message)
-    } else {
-      console.warn('[upload] Keine Zahlungsarten gefunden – payment_type Felder in Zeilen:', rows.slice(0, 3).map(r => r.payment_type))
-    }
-
-    // ── 3. Sales: one record per upload with the grand total ─────────────────
-    const grandTotal = Math.round(
-      Array.from(productAgg.values()).reduce((s, a) => s + a.total_revenue, 0) * 100
-    ) / 100
-    if (grandTotal > 0) {
-      const uploadDate = new Date().toISOString().slice(0, 10)
-      const { error: salesErr } = await supabase.from('sales').insert({
-        customer_id: customerId,
-        upload_id: uploadId,
-        date: uploadDate,
-        total_amount: grandTotal,
-        year: year || null,
-        month: month || null,
-        weekday: null,
-      })
-      if (salesErr) console.warn('[upload] Sales-Insert fehlgeschlagen:', salesErr.message)
-      else console.info('[upload] Sales-Eintrag gespeichert: CHF', grandTotal, '| Jahr:', year, '| Monat:', month)
-    }
-
-    return aggregated.length
-  } else if (type === 'employees') {
-    const prepared = rows.map((r) => ({
-      customer_id: customerId,
-      name: String(r.name ?? '').trim() || null,
-      total_revenue: Number(r.total_amount) || null,
-      transaction_count: Number(r.transaction_count) || null,
-      year: year || null,
-    }))
-    console.info('[upload] Mitarbeiter vorbereitet:', prepared.length)
-    for (let i = 0; i < prepared.length; i += BATCH) {
-      const { data, error } = await supabase.from('employees').insert(prepared.slice(i, i + BATCH)).select('id')
-      console.info('[upload] Employees insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
-      if (error) throw new Error(error.message || JSON.stringify(error))
-    }
-    return prepared.length
-  } else if (type === 'payments') {
-    const prepared = rows.map((r) => ({
-      customer_id: customerId,
-      payment_type: String(r.payment_type ?? '').trim() || null,
-      amount: Number(r.total_amount) || Number(r.amount) || null,
-      percentage: Number(r.percentage) || null,
-      year: year || null,
-    }))
-    console.info('[upload] Zahlungsarten vorbereitet:', prepared.length)
-    for (let i = 0; i < prepared.length; i += BATCH) {
-      const { data, error } = await supabase.from('payments').insert(prepared.slice(i, i + BATCH)).select('id')
-      console.info('[upload] Payments insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
-      if (error) throw new Error(error.message || JSON.stringify(error))
-    }
-    return prepared.length
-  } else if (type === 'product_groups') {
-    const prepared = rows.map((r) => ({
-      customer_id: customerId,
-      name: String(r.product_group ?? r.name ?? '').trim() || null,
-      total_revenue: Number(r.total_amount) || null,
-      year: year || null,
-    }))
-    console.info('[upload] Warengruppen vorbereitet:', prepared.length)
-    for (let i = 0; i < prepared.length; i += BATCH) {
-      const { data, error } = await supabase.from('product_groups').insert(prepared.slice(i, i + BATCH)).select('id')
-      console.info('[upload] ProductGroups insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
-      if (error) throw new Error(error.message || JSON.stringify(error))
-    }
-    return prepared.length
-  }
-
-  return rows.length
-}
-
-// Parses DD.MM.YYYY, YYYY-MM-DD, DD/MM/YYYY and extracts year
-function extractYear(date?: string | number | null): number | null {
-  if (!date) return null
-  const s = String(date)
-  const m = s.match(/(\d{4})/)
-  return m ? parseInt(m[1]) : null
-}
-
-// Parses DD.MM.YYYY and YYYY-MM-DD → returns 1-12
-function extractMonth(date?: string | number | null): number | null {
-  if (!date) return null
-  const s = String(date).trim()
-  // DD.MM.YYYY or DD/MM/YYYY
-  const dmy = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/)
-  if (dmy) return parseInt(dmy[2])
-  // YYYY-MM-DD or YYYY.MM.DD
-  const ymd = s.match(/^(\d{4})[.\/-](\d{1,2})[.\/-](\d{1,2})$/)
-  if (ymd) return parseInt(ymd[2])
-  // Fallback: try JS Date (for ISO strings)
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d.getMonth() + 1
-}
-
-// Returns 0=Sun, 1=Mon, ..., 6=Sat
-function extractWeekday(date?: string | number | null): number | null {
-  if (!date) return null
-  const s = String(date).trim()
-  // DD.MM.YYYY or DD/MM/YYYY → build ISO string YYYY-MM-DD for reliable parsing
-  const dmy = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/)
-  if (dmy) {
-    const iso = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`
-    const d = new Date(iso)
-    return isNaN(d.getTime()) ? null : d.getDay()
-  }
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? null : d.getDay()
 }
