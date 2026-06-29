@@ -15,8 +15,10 @@ const COLUMN_ALIASES: Record<string, string> = {
   gesamtumsatz: 'total_amount', nettoumsatz: 'total_amount', bruttoumsatz: 'total_amount',
   'netto umsatz': 'total_amount', 'brutto umsatz': 'total_amount',
   umsatz: 'total_amount', revenue: 'total_amount', betrag: 'total_amount',
-  // Per-row subtotals (stored as-is, not used as total_amount)
-  netto: 'netto', brutto: 'brutto', mwst: 'mwst', rabatt: 'rabatt',
+  // Brutto = Gesamtumsatz in this file layout
+  brutto: 'total_amount',
+  // Per-row subtotals stored under own keys
+  netto: 'netto', mwst: 'mwst', rabatt: 'rabatt',
   // Price
   'preis(chf)': 'price', preis: 'price', price: 'price',
   // Transaction count
@@ -203,38 +205,84 @@ export async function parseFile(file: File): Promise<{
     }
 
     const rawHeaderRow = Array.isArray(matrix[headerRowIdx]) ? (matrix[headerRowIdx] as unknown[]) : []
-    headers = rawHeaderRow.map((c) => String(c ?? '').trim()).filter(Boolean)
-    const headerStr = headers.map((h) => String(h ?? '').trim()).join('|')
-    debugInfo = `XLS: Headerzeile ${headerRowIdx}, Spalten: ${headers.join(', ')}`
+
+    // Build header map preserving ORIGINAL column indices (filter(Boolean) would break index alignment)
+    const headerMapping: { name: string; colIdx: number }[] = []
+    rawHeaderRow.forEach((c, idx) => {
+      const h = String(c ?? '').trim()
+      if (h) headerMapping.push({ name: h, colIdx: idx })
+    })
+    headers = headerMapping.map((m) => m.name)
+    const totalCols = rawHeaderRow.length  // full width including empty columns
+
+    // headerStr for duplicate-row detection uses only non-empty header names
+    const headerStr = headers.join('|')
+    debugInfo = `XLS: Headerzeile ${headerRowIdx}, Spalten: ${headers.join(', ')} (total cols: ${totalCols})`
+
+    // Resolve which raw column index holds the total_amount (Brutto/Gesamtumsatz)
+    // Primary: from header mapping; Fallback: col 12 per confirmed file layout
+    let totalColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'total_amount')?.colIdx ?? -1
+    if (totalColIdx < 0 && totalCols >= 13) totalColIdx = 12
+
+    // Same for quantity (Anzahl = col 5) and netto (col 10)
+    const quantityColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'total_quantity')?.colIdx
+      ?? (totalCols >= 6 ? 5 : -1)
+    const nettoColIdx = headerMapping.find((m) => normalizeKey(m.name) === 'netto')?.colIdx
+      ?? (totalCols >= 11 ? 10 : -1)
 
     let currentPaymentType: string | null = null
     const paymentGroupMap = new Map<string, number>()
-    // Index of the Gesamtumsatz column – used to accumulate payment group totals from data rows
-    const totalColIdx = headers.findIndex((h) => normalizeKey(h) === 'total_amount')
+    // Known payment type prefixes
+    const PAYMENT_PREFIXES = ['debitori', 'carte', 'contanti', 'bar ', 'karte', 'twint', 'reka']
 
     for (let i = headerRowIdx + 1; i < matrix.length; i++) {
       const row = Array.isArray(matrix[i]) ? (matrix[i] as unknown[]) : []
       const cells = row.map((c) => String(c ?? '').trim())
+      const firstName = cells[0] ?? ''
+      const firstLower = firstName.toLowerCase()
 
-      // Detect payment group headers (e.g. "Debitori Im Haus", "Carte Im Haus")
-      if (isPaymentGroupHeader(row, headers.length)) {
-        currentPaymentType = cells[0]
+      // Payment group header: first cell has text, everything else empty, not a data row
+      // Also catch known payment type keywords explicitly
+      const isKnownPayment = PAYMENT_PREFIXES.some((p) => firstLower.startsWith(p))
+      if (isKnownPayment || isPaymentGroupHeader(row, totalCols)) {
+        currentPaymentType = firstName
         continue
       }
 
-      if (isSkipRow(row, headers.length)) continue
-      const rowStr = row.slice(0, headers.length).map((c) => String(c ?? '').trim()).join('|')
+      // Skip total/summary rows and empty rows
+      if (isSkipRow(row, totalCols)) continue
+
+      // Skip repeated header rows
+      const rowStr = headerMapping.map((m) => String(row[m.colIdx] ?? '').trim()).join('|')
       if (rowStr === headerStr) continue
 
+      // Skip rows where col 0 (Name) is empty – these are filler/structure rows
+      if (!firstName) continue
+
       const obj: Record<string, unknown> = {}
-      headers.forEach((h, j) => { obj[h] = row[j] ?? '' })
+      // Map using ORIGINAL column indices to avoid empty-column offset bugs
+      headerMapping.forEach(({ name, colIdx }) => { obj[name] = row[colIdx] ?? '' })
+
+      // Index-based fallbacks for sparse files where header detection may miss columns
+      if (obj['Anzahl'] === '' || obj['Anzahl'] === undefined) {
+        const v = row[quantityColIdx]
+        if (v !== '' && v !== undefined) obj['Anzahl'] = v
+      }
+      if (obj['Brutto'] === '' || obj['Brutto'] === undefined) {
+        const v = row[totalColIdx]
+        if (v !== '' && v !== undefined) obj['Brutto'] = v
+      }
+      if (obj['Netto'] === '' || obj['Netto'] === undefined) {
+        const v = row[nettoColIdx]
+        if (v !== '' && v !== undefined) obj['Netto'] = v
+      }
+
       if (currentPaymentType) obj.__payment_type = currentPaymentType
       rawRows.push(obj)
 
-      // Accumulate payment group total from the Gesamtumsatz column of each data row
+      // Accumulate payment group total from the Brutto/Gesamtumsatz column
       if (currentPaymentType && totalColIdx >= 0) {
-        const v = row[totalColIdx]
-        const amount = parseNumber(v)
+        const amount = parseNumber(row[totalColIdx])
         if (amount > 0) {
           paymentGroupMap.set(currentPaymentType, (paymentGroupMap.get(currentPaymentType) ?? 0) + amount)
         }
