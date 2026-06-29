@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
-import { parseFile, type ParsedRow, type ReportType } from './csvParser'
+import { parseFile, type ParsedRow, type ReportType, type PaymentGroup } from './csvParser'
+import { generateAIInsights } from './openai'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -28,7 +29,7 @@ export async function uploadAndProcess(
   onProgress?.(20)
 
   try {
-    const { type, rows, year, debugInfo } = await parseFile(file)
+    const { type, rows, year, debugInfo, paymentGroups } = await parseFile(file)
     onProgress?.(50)
 
     console.info('[upload] Datei geparst:', { type, year, debugInfo, rowCount: rows.length, customerId })
@@ -41,7 +42,7 @@ export async function uploadAndProcess(
       return { success: false, message: 'Unbekanntes Dateiformat', rowsImported: 0 }
     }
 
-    const rowsImported = await insertRows(type, rows, customerId, uploadRecord.id, year)
+    const rowsImported = await insertRows(type, rows, customerId, uploadRecord.id, year, paymentGroups)
     onProgress?.(90)
 
     console.info('[upload] Import abgeschlossen:', { rowsImported, type })
@@ -50,6 +51,13 @@ export async function uploadAndProcess(
       .from('uploads')
       .update({ status: 'done', report_type: type, year: year || null })
       .eq('id', uploadRecord.id)
+
+    // Auto-trigger AI analysis after products or payments upload
+    if (rowsImported > 0 && (type === 'products' || type === 'payments' || type === 'sales')) {
+      triggerAutoAIAnalysis(customerId).catch((err) =>
+        console.warn('[upload] Auto-KI-Analyse fehlgeschlagen:', err)
+      )
+    }
 
     onProgress?.(100)
     return { success: true, message: `${rowsImported} Datensätze importiert`, rowsImported }
@@ -60,12 +68,64 @@ export async function uploadAndProcess(
   }
 }
 
+async function triggerAutoAIAnalysis(customerId: string): Promise<void> {
+  const { data: salesData } = await supabase
+    .from('sales')
+    .select('total_amount, transaction_count, year')
+    .eq('customer_id', customerId)
+
+  const { data: productsData } = await supabase
+    .from('products')
+    .select('name, total_revenue')
+    .eq('customer_id', customerId)
+    .order('total_revenue', { ascending: false })
+    .limit(5)
+
+  const { data: customerData } = await supabase
+    .from('customers')
+    .select('name')
+    .eq('id', customerId)
+    .maybeSingle()
+
+  const sales = (salesData as any[]) || []
+  const products = (productsData as any[]) || []
+  const customerName = (customerData as any)?.name || 'Kunde'
+
+  const totalRevenue = sales.reduce((s: number, r: any) => s + (r.total_amount || 0), 0)
+  const totalTransactions = sales.reduce((s: number, r: any) => s + (r.transaction_count || 0), 0)
+  const avgReceipt = totalTransactions ? totalRevenue / totalTransactions : 0
+  const years = [...new Set(sales.map((r: any) => r.year).filter(Boolean))]
+
+  const top5 = products.map((p: any) => `${p.name}: CHF ${(p.total_revenue || 0).toFixed(2)}`).join(', ')
+
+  const kpiData =
+    `Gesamtumsatz: CHF ${totalRevenue.toFixed(2)}, ` +
+    `Transaktionen: ${totalTransactions}, ` +
+    `Ø Bonwert: CHF ${avgReceipt.toFixed(2)}, ` +
+    `Jahre: ${years.join(', ')}, ` +
+    `Top 5 Artikel: ${top5 || 'keine Daten'}`
+
+  const { insights, recommendations, summary } = await generateAIInsights(kpiData, customerName)
+
+  await supabase.from('ai_results').delete().eq('customer_id', customerId)
+
+  const inserts = [
+    ...insights.map((content: string) => ({ customer_id: customerId, type: 'insight' as const, content })),
+    ...recommendations.map((content: string) => ({ customer_id: customerId, type: 'recommendation' as const, content })),
+    { customer_id: customerId, type: 'summary' as const, content: summary },
+  ]
+
+  await supabase.from('ai_results').insert(inserts)
+  console.info('[upload] Auto-KI-Analyse gespeichert:', inserts.length, 'Einträge')
+}
+
 async function insertRows(
   type: ReportType,
   rows: ParsedRow[],
   customerId: string,
   uploadId: string,
-  year?: number
+  year?: number,
+  paymentGroups?: PaymentGroup[]
 ): Promise<number> {
   const BATCH = 100
 
@@ -114,6 +174,21 @@ async function insertRows(
       console.info('[upload] Products insert batch', i / BATCH + 1, '→', error ? `FEHLER: ${error.message}` : `${data?.length} Zeilen eingefügt`)
       if (error) throw new Error(`Produktdaten-Import fehlgeschlagen: ${error.message}`)
     }
+
+    // Also save payment groups detected from "Umsatz nach Artikel und Abrechnungsart"
+    if (paymentGroups && paymentGroups.length > 0) {
+      const preparedPayments = paymentGroups.map((pg) => ({
+        customer_id: customerId,
+        payment_type: pg.payment_type,
+        amount: pg.total || null,
+        percentage: null,
+        year: year || null,
+      }))
+      console.info('[upload] Zahlungsgruppen aus Artikel-Datei:', preparedPayments.length)
+      const { error: payErr } = await supabase.from('payments').insert(preparedPayments)
+      if (payErr) console.warn('[upload] Zahlungsgruppen-Insert fehlgeschlagen:', payErr.message)
+    }
+
     return aggregated.length
   } else if (type === 'employees') {
     const prepared = rows.map((r) => ({

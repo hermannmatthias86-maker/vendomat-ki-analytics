@@ -1,5 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { Euro, Receipt, TrendingUp, BarChart2, Brain, Lightbulb } from 'lucide-react'
+
+const LazyMonthBarChart = lazy(() => import('../components/charts/MonthBarChart'))
+const LazyTopProductsBar = lazy(() => import('../components/charts/TopProductsBar'))
+const LazyPaymentDonut = lazy(() => import('../components/charts/PaymentDonut'))
+
+const ChartSkeleton = () => (
+  <div className="h-32 bg-gray-50 rounded animate-pulse" />
+)
 import { useCustomer } from '../hooks/useCustomer'
 import { fetchDashboardKPIs, fetchSalesByMonth, fetchTopProducts, fetchProductGroups, fetchPayments, fetchSalesByWeekday, fetchAIResults } from '../lib/queries'
 import { formatCurrency, formatNumber } from '../lib/exports'
@@ -87,10 +95,8 @@ export default function Dashboard() {
 
   const hasSalesData = kpis && kpis.totalRevenue > 0
   const hasData = hasSalesData || topProducts.length > 0 || payments.length > 0 || productGroups.length > 0
-  const maxMonth = Math.max(...monthData.map((d) => d.umsatz), 1)
   const maxDay = Math.max(...weekdayData.map((d) => d.umsatz), 1)
   const maxGroup = Math.max(...productGroups.map((g) => g.total_revenue || 0), 1)
-  const totalPayments = payments.reduce((s, p) => s + (p.amount || 0), 0) || 1
 
   return (
     <div className="space-y-6">
@@ -129,17 +135,9 @@ export default function Dashboard() {
             <div className="card">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Umsatz nach Monat</h3>
               {monthData.some((d) => d.umsatz > 0) ? (
-                <div className="flex items-end gap-1 h-32">
-                  {monthData.map((d) => (
-                    <div key={d.month} className="flex-1 flex flex-col items-center gap-1">
-                      <div
-                        className="w-full bg-blue-500 rounded-t"
-                        style={{ height: `${Math.round((d.umsatz / maxMonth) * 100)}%`, minHeight: d.umsatz > 0 ? '2px' : '0' }}
-                      />
-                      <span className="text-gray-400" style={{ fontSize: '9px' }}>{d.month}</span>
-                    </div>
-                  ))}
-                </div>
+                <Suspense fallback={<ChartSkeleton />}>
+                  <LazyMonthBarChart data={monthData} />
+                </Suspense>
               ) : (
                 <NoDataPlaceholder />
               )}
@@ -171,25 +169,9 @@ export default function Dashboard() {
               {topProducts.length === 0 ? (
                 <p className="text-xs text-gray-400">Keine Artikeldaten vorhanden.</p>
               ) : (
-                <ol className="space-y-2">
-                  {topProducts.map((p, i) => (
-                    <li key={i} className="flex items-center gap-3">
-                      <span className="text-xs font-bold text-gray-400 w-4">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-gray-800 truncate">{p.name || '—'}</p>
-                        <div className="w-full bg-gray-100 rounded-full h-1 mt-1">
-                          <div
-                            className="bg-blue-500 h-1 rounded-full"
-                            style={{ width: `${((p.total_revenue || 0) / (topProducts[0]?.total_revenue || 1)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      <span className="text-xs text-gray-600 font-medium whitespace-nowrap">
-                        {formatCurrency(p.total_revenue || 0)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
+                <Suspense fallback={<ChartSkeleton />}>
+                  <LazyTopProductsBar data={topProducts} />
+                </Suspense>
               )}
             </div>
 
@@ -217,23 +199,9 @@ export default function Dashboard() {
               {payments.length === 0 ? (
                 <p className="text-xs text-gray-400">Keine Zahlungsdaten vorhanden.</p>
               ) : (
-                <div className="space-y-2">
-                  {payments.map((p, i) => {
-                    const pct = Math.round(((p.amount || 0) / totalPayments) * 100)
-                    const colors = ['bg-blue-500', 'bg-blue-400', 'bg-blue-300', 'bg-gray-300']
-                    return (
-                      <div key={i}>
-                        <div className="flex justify-between text-xs mb-1">
-                          <span className="text-gray-600">{p.payment_type || '—'}</span>
-                          <span className="text-gray-500">{pct}%</span>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-1.5">
-                          <div className={`${colors[i] || 'bg-gray-300'} h-1.5 rounded-full`} style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                <Suspense fallback={<ChartSkeleton />}>
+                  <LazyPaymentDonut data={payments} />
+                </Suspense>
               )}
             </div>
           </div>

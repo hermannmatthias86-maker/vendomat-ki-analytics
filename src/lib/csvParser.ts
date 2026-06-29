@@ -61,34 +61,30 @@ function normalizeKey(key: unknown): string {
   return lower.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '') || '_'
 }
 
-function parseNumber(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === '') return null
-  if (typeof raw === 'number') return isNaN(raw) ? null : raw
-  const raw_s = String(raw ?? '').trim()
-  if (!raw_s) return null
-  // Strip Swiss apostrophe thousands separator before validation: 1'234.56 → 1234.56
-  const s = raw_s.replace(/'/g, '')
-  // Only parse values that look like pure numbers (digits, separators, optional sign).
-  // Prevents "1/2 AFFETTATO LEVENTINESE" or "01.06.2026" from being parsed as a number.
-  if (!/^[-+]?[\d.,]+$/.test(s)) return null
-  // German/Swiss format detection:
-  // "1.234,56" → remove thousands sep '.', replace decimal ',' → '.'
-  // "1234.56" or "1234,56" → straightforward
-  let normalized: string
-  const hasComma = s.includes(',')
-  const hasDot = s.includes('.')
-  if (hasComma && hasDot && s.indexOf('.') < s.indexOf(',')) {
-    // German: 1.234,56
-    normalized = s.replace(/\./g, '').replace(',', '.')
-  } else if (hasComma && !hasDot) {
-    // 1234,56
-    normalized = s.replace(',', '.')
-  } else {
-    // 1234.56 or 1234
-    normalized = s
+function parseNumber(val: unknown): number {
+  if (val === null || val === undefined || val === '') return 0
+  if (typeof val === 'number') return isNaN(val) ? 0 : val
+  const str = String(val).replace(/'/g, '').replace(/\s/g, '')
+  if (!str || !/^[-+]?[\d.,]+$/.test(str)) return 0
+  // German format: 1.234,56 (dot before comma → dot is thousands sep)
+  if (str.includes(',') && str.includes('.') && str.indexOf('.') < str.indexOf(',')) {
+    return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0
   }
-  const n = parseFloat(normalized.replace(/[^0-9.\-]/g, ''))
-  return isNaN(n) ? null : n
+  // Swiss/standard: 1'234.56 (apostrophe already removed), or 1234,56
+  return parseFloat(str.replace(',', '.')) || 0
+}
+
+function isPaymentGroupHeader(row: unknown[], numHeaderCols: number): boolean {
+  if (numHeaderCols <= 3) return false
+  const cells = row.map((c) => String(c ?? '').trim())
+  const nonEmpty = cells.filter((c) => c !== '').length
+  if (nonEmpty === 0 || nonEmpty > 2) return false
+  if (!cells.slice(1).every((c) => c === '')) return false
+  const first = cells[0]
+  if (!first) return false
+  if (SKIP_ROW_PREFIXES.some((p) => first.toLowerCase().startsWith(p))) return false
+  if (DATE_PATTERN.test(first)) return false
+  return true
 }
 
 function isHeaderRow(row: unknown[]): boolean {
@@ -151,12 +147,18 @@ function detectReportType(headers: string[], filename = ''): ReportType {
   return 'unknown'
 }
 
+export interface PaymentGroup {
+  payment_type: string
+  total: number
+}
+
 export async function parseFile(file: File): Promise<{
   type: ReportType
   rows: ParsedRow[]
   headers: string[]
   year?: number
   debugInfo?: string
+  paymentGroups?: PaymentGroup[]
 }> {
   const ext = String(file.name ?? '').split('.').pop()?.toLowerCase() ?? ''
 
@@ -202,8 +204,31 @@ export async function parseFile(file: File): Promise<{
     const headerStr = headers.map((h) => String(h ?? '').trim()).join('|')
     debugInfo = `XLS: Headerzeile ${headerRowIdx}, Spalten: ${headers.join(', ')}`
 
+    let currentPaymentType: string | null = null
+    const paymentGroupMap = new Map<string, number>()
+
     for (let i = headerRowIdx + 1; i < matrix.length; i++) {
       const row = Array.isArray(matrix[i]) ? (matrix[i] as unknown[]) : []
+      const cells = row.map((c) => String(c ?? '').trim())
+      const firstLower = cells[0]?.toLowerCase() ?? ''
+
+      // Detect payment group headers (e.g. "Debitori Im Haus", "Carte Im Haus")
+      if (isPaymentGroupHeader(row, headers.length)) {
+        currentPaymentType = cells[0]
+        continue
+      }
+
+      // Capture subtotal rows to extract payment group totals
+      if (SKIP_ROW_PREFIXES.some((p) => firstLower.startsWith(p)) && currentPaymentType) {
+        const amounts = cells.slice(1)
+          .map((c) => parseNumber(c))
+          .filter((n): n is number => n > 0)
+        if (amounts.length > 0) {
+          const existing = paymentGroupMap.get(currentPaymentType) ?? 0
+          paymentGroupMap.set(currentPaymentType, existing + Math.max(...amounts))
+        }
+      }
+
       if (isSkipRow(row, headers.length)) continue
       const rowStr = row.slice(0, headers.length).map((c) => String(c ?? '').trim()).join('|')
       if (rowStr === headerStr) continue
@@ -212,7 +237,17 @@ export async function parseFile(file: File): Promise<{
       headers.forEach((h, j) => {
         obj[h] = row[j] ?? ''
       })
+      if (currentPaymentType) obj.__payment_type = currentPaymentType
       rawRows.push(obj)
+    }
+
+    if (paymentGroupMap.size > 0) {
+      const groups: PaymentGroup[] = Array.from(paymentGroupMap.entries()).map(([pt, total]) => ({
+        payment_type: pt,
+        total,
+      }))
+      // Will be attached to the return value below
+      ;(rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups = groups
     }
 
     debugInfo += `, ${rawRows.length} Datenzeilen nach Filterung`
@@ -224,17 +259,27 @@ export async function parseFile(file: File): Promise<{
 
   const type = detectReportType(headers, String(file.name ?? ''))
 
+  // Extract paymentGroups that were attached during XLS parsing
+  const attachedGroups = (rawRows as unknown as { __paymentGroups?: PaymentGroup[] }).__paymentGroups
+  const paymentGroups: PaymentGroup[] | undefined = attachedGroups
+
   const rows: ParsedRow[] = rawRows.map((row) => {
     const normalized: ParsedRow = {}
     for (const key in row) {
+      if (key === '__paymentGroups') continue
       const normKey = normalizeKey(key)
       const val = row[key]
       if (STRING_FIELDS.has(normKey)) {
-        // Always store as string – article names like "1/2 AFFETTATO..." must not become 12
         normalized[normKey] = String(val ?? '').trim() || null
       } else {
-        const num = parseNumber(val)
-        normalized[normKey] = num !== null ? num : (String(val ?? '').trim() || null)
+        const rawStr = String(val ?? '').trim()
+        if (!rawStr) {
+          normalized[normKey] = null
+        } else {
+          const num = parseNumber(val)
+          // If num is 0 but raw wasn't a zero-like string, keep the string (e.g. non-numeric col)
+          normalized[normKey] = (num !== 0 || /^[-+]?0[.,]?0*$/.test(rawStr)) ? num : (rawStr || null)
+        }
       }
     }
     return normalized
@@ -243,11 +288,11 @@ export async function parseFile(file: File): Promise<{
   const yearMatch = String(file.name ?? '').match(/20\d{2}/)
   const year = yearMatch ? parseInt(yearMatch[0]) : undefined
 
-  // Column mapping diagnostic: original header → normalized key
   const colMap = Object.fromEntries(headers.map((h) => [h, normalizeKey(h)]))
   console.info('[csvParser]', debugInfo, '| Typ:', type, '| Jahr:', year)
   console.info('[csvParser] Spalten-Mapping:', JSON.stringify(colMap))
   console.info('[csvParser] Erste 3 Zeilen:', JSON.stringify(rows.slice(0, 3)))
+  if (paymentGroups?.length) console.info('[csvParser] Zahlungsgruppen:', JSON.stringify(paymentGroups))
 
-  return { type, rows, headers, year, debugInfo }
+  return { type, rows, headers, year, debugInfo, paymentGroups }
 }
