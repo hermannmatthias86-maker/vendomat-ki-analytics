@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Suspense, lazy } from 'react'
 import { useAuth } from './hooks/useAuth'
+import { AppDataProvider } from './context/AppDataContext'
 import DashboardLayout from './components/layout/DashboardLayout'
 import LoadingSpinner from './components/ui/LoadingSpinner'
 import ErrorBoundary from './components/ui/ErrorBoundary'
@@ -39,6 +40,7 @@ const fullPageFallback = <div className="min-h-screen flex items-center justify-
 export default function App() {
   return (
     <ErrorBoundary>
+      <AppDataProvider>
       <BrowserRouter>
         <Routes>
           {/* Public routes: each wrapped in its own Suspense so lazy loading never touches DashboardLayout */}
@@ -70,6 +72,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+      </AppDataProvider>
     </ErrorBoundary>
   )
 }

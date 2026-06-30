@@ -1,27 +1,10 @@
-import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
-import type { User, Session } from '@supabase/supabase-js'
+import { useAppData } from '../context/AppDataContext'
 
+/**
+ * Reads auth state from the shared AppDataProvider. The session is loaded once
+ * per app session, not per component mount.
+ */
 export function useAuth() {
-  const [user, setUser] = useState<User | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setUser(data.session?.user ?? null)
-      setLoading(false)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  return { user, session, loading, isAuthenticated: !!user }
+  const { user, session, authLoading, isAuthenticated } = useAppData()
+  return { user, session, loading: authLoading, isAuthenticated }
 }
