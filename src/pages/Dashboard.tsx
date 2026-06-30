@@ -41,6 +41,7 @@ export default function Dashboard() {
   const [aiInsights, setAiInsights] = useState<string[]>([])
   const [aiRecommendations, setAiRecommendations] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [selectedYear, setSelectedYear] = useState<number | undefined>()
 
   useEffect(() => {
@@ -51,6 +52,7 @@ export default function Dashboard() {
   async function loadData() {
     if (!customer) return
     setLoading(true)
+    setLoadError(false)
     try {
       const [kpiData, sales, products, groups, paymentsData, weekdays, aiData] = await Promise.all([
         fetchDashboardKPIs(customer.id, selectedYear),
@@ -84,8 +86,11 @@ export default function Dashboard() {
       const recs = aiData.filter((a) => a.type === 'recommendation').map((a) => a.content || '')
       setAiInsights(insights.slice(0, 5))
       setAiRecommendations(recs.slice(0, 4))
-    } catch (err) {
-      console.error(err)
+    } catch {
+      // Handle the failure locally on the Dashboard route instead of emitting a
+      // global console.error — the dashboard hook only runs while this page is
+      // mounted, so errors should not surface from other routes.
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -118,7 +123,9 @@ export default function Dashboard() {
         ) : null}
       </div>
 
-      {loading ? <LoadingSpinner /> : !hasData ? (
+      {loading ? <LoadingSpinner /> : loadError ? (
+        <EmptyState message="Daten konnten nicht geladen werden. Bitte versuchen Sie es später erneut." />
+      ) : !hasData ? (
         <EmptyState message="Noch keine Verkaufsdaten vorhanden. Laden Sie Ihre Kassendaten hoch." />
       ) : (
         <>
