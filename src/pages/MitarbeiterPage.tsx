@@ -39,6 +39,13 @@ export default function MitarbeiterPage() {
   const hasStornos = employees.some(e => e.storno_amount !== null)
   const hasRevenue = employees.some(e => e.total_revenue !== null)
 
+  // Rows exist but none qualify for either table (e.g. all storno_amount /
+  // total_revenue are null). Without this guard the page would render an empty
+  // <div> and look like a blank white screen.
+  if (!hasStornos && !hasRevenue) {
+    return <EmptyState message="Noch keine auswertbaren Mitarbeiterdaten vorhanden. Laden Sie einen «Stornos_pro_Mitarbeiter»-Bericht hoch." />
+  }
+
   return (
     <div className="space-y-4">
       {hasStornos && (
